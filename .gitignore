@@ -1,0 +1,5 @@
+/bin/
+/default.sublime-*
+/include/
+/letsencrypt-nosudo/
+/lib/
