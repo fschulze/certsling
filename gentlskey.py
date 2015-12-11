@@ -12,6 +12,11 @@ OPENSSL_CONF = '/usr/local/etc/openssl/openssl.cnf'
 SIGN_CSR = os.path.join(BASE, '..', 'letsencrypt-nosudo', 'sign_csr.py')
 
 
+def fatal(msg, code=3):
+    click.echo(click.style(msg, fg='red'))
+    sys.exit(code)
+
+
 def genkey(key_base, date, main):
     fn = os.path.join(key_base, "%s.key" % main)
     if os.path.exists(fn):
@@ -120,17 +125,14 @@ def chain(key_base, crt, pem, main):
 def generate(base, domains):
     user_pub = os.path.join(base, 'user.pub')
     if not os.path.exists(user_pub):
-        print("No 'user.pub' in current directory.")
-        sys.exit(10)
+        fatal("No 'user.pub' in current directory.", code=10)
     if not os.path.exists(SIGN_CSR):
-        print("No 'letsencrypt-nosudo' in '%s' directory." % BASE)
-        sys.exit(10)
+        fatal("No 'letsencrypt-nosudo' in '%s' directory." % BASE, code=10)
     domains = sorted(domains, key=len)
     main, domains = domains[0], domains[1:]
     for domain in domains:
         if not domain.endswith("." + main):
-            print("Domain '%s' isn't a subdomain of '%s'.")
-            sys.exit(3)
+            fatal("Domain '%s' isn't a subdomain of '%s'.")
     key_base = os.path.join(base, main)
     if not os.path.exists(key_base):
         os.mkdir(key_base)
