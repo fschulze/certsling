@@ -12,6 +12,44 @@ OPENSSL_CONF = Path('/usr/local/etc/openssl/openssl.cnf')
 SIGN_CSR = BASE.joinpath('letsencrypt-nosudo', 'sign_csr.py')
 
 
+def yesno(question, default=None, all=False):
+    if default is True:
+        question = "%s [Yes/no" % question
+        answers = {
+            False: ('n', 'no'),
+            True: ('', 'y', 'yes'),
+        }
+    elif default is False:
+        question = "%s [yes/No" % question
+        answers = {
+            False: ('', 'n', 'no'),
+            True: ('y', 'yes'),
+        }
+    else:
+        question = "%s [yes/no" % question
+        answers = {
+            False: ('n', 'no'),
+            True: ('y', 'yes'),
+        }
+    if all:
+        if default is 'all':
+            answers['all'] = ('', 'a', 'all')
+            question = "%s/All" % question
+        else:
+            answers['all'] = ('a', 'all')
+            question = "%s/all" % question
+    question = "%s] " % question
+    while 1:
+        answer = input(question).lower()
+        for option in answers:
+            if answer in answers[option]:
+                return option
+        if all:
+            print("You have to answer with y, yes, n, no, a or all.", file=sys.stderr)
+        else:
+            print("You have to answer with y, yes, n or no.", file=sys.stderr)
+
+
 def fatal(msg, code=3):
     click.echo(click.style(msg, fg='red'))
     sys.exit(code)
@@ -61,7 +99,11 @@ def dated_file_generator(base, name, date):
     return generator
 
 
-def genkey(fn):
+def genkey(fn, ask=False):
+    if ask:
+        click.echo('There is no user key in the current directory %s.' % Path.cwd())
+        if not yesno('Do you want to create a user key?', False):
+            fatal('No user key created')
     subprocess.check_call([
         OPENSSL, 'genrsa', '-out', str(fn), '4096'])
 
@@ -126,7 +168,7 @@ def chain(fn, crt, pem):
 
 def generate(base, domains):
     user_key = file_generator(base, 'user')(
-        'private user key', '.key', genkey)
+        'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
         'public user key', '.pub', genpub, user_key)
     if not SIGN_CSR.exists():
