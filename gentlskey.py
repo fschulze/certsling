@@ -1,4 +1,4 @@
-import argparse
+import click
 import datetime
 import os
 import subprocess
@@ -143,12 +143,12 @@ def generate(base, domains):
     chain(key_base, crt, pem, main)
 
 
-def main():
+@click.command()
+@click.argument("domain", nargs=-1)
+def main(domain):
     base = os.getcwd()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("domain", nargs="+")
-    args = parser.parse_args()
-    generate(base, args.domain)
+    if domain:
+        generate(base, domain)
 
 
 if __name__ == '__main__':
