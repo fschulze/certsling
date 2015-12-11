@@ -1,4 +1,3 @@
-#!/usr/bin/env python2.7
 import argparse
 import datetime
 import os
@@ -10,7 +9,7 @@ BASE = os.path.dirname(os.path.abspath(sys.argv[0]))
 CURL = 'curl'
 OPENSSL = 'openssl'
 OPENSSL_CONF = '/usr/local/etc/openssl/openssl.cnf'
-SIGN_CSR = os.path.join(BASE, 'letsencrypt-nosudo', 'sign_csr.py')
+SIGN_CSR = os.path.join(BASE, '..', 'letsencrypt-nosudo', 'sign_csr.py')
 
 
 def genkey(key_base, date, main):
@@ -45,9 +44,9 @@ def gencsr(key_base, date, key, main, domains):
                     config.write(data)
                     if not data.endswith(b'\n'):
                         config.write(b'\n')
-                dns = b','.join(b'DNS:%s' % x for x in [main] + domains)
+                dns = ','.join('DNS:%s' % x for x in [main] + domains)
                 lines = ['', '[SAN]', 'subjectAltName = %s' % dns, '']
-                config.write(b'\n'.join(lines))
+                config.write(bytes('\n'.join(lines).encode('ascii')))
             subprocess.check_call([
                 OPENSSL, 'req', '-sha256', '-new',
                 '-key', key, '-out', fn_date, '-subj', '/', '-reqexts', 'SAN',
@@ -77,7 +76,7 @@ def gencrt(key_base, date, csr, user_pub, main):
         print("Generating csr '%s'." % os.path.relpath(fn_date))
         with open(fn_date, 'wb') as f:
             subprocess.check_call([
-                'python', SIGN_CSR, '--public-key', user_pub, csr],
+                'python2.7', SIGN_CSR, '--public-key', user_pub, csr],
                 stdout=f)
     if os.path.exists(fn_date):
         print("Linking crt '%s'." % os.path.relpath(fn_date))
@@ -144,7 +143,7 @@ def generate(base, domains):
     chain(key_base, crt, pem, main)
 
 
-def run():
+def main():
     base = os.getcwd()
     parser = argparse.ArgumentParser()
     parser.add_argument("domain", nargs="+")
@@ -153,4 +152,4 @@ def run():
 
 
 if __name__ == '__main__':
-    run()
+    main()
