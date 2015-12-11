@@ -419,16 +419,17 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains):
+def generate(base, domains, multi):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
         'public user key', '.pub', genpub, user_key)
     domains = sorted(domains, key=len)
     main = domains[0]
-    for domain in domains[1:]:
-        if not domain.endswith("." + main):
-            fatal("Domain '%s' isn't a subdomain of '%s'.")
+    if not multi:
+        for domain in domains[1:]:
+            if not domain.endswith("." + main):
+                fatal("Domain '%s' isn't a subdomain of '%s'.")
     key_base = base.joinpath(main)
     if not key_base.exists():
         key_base.mkdir()
@@ -449,12 +450,13 @@ def generate(base, domains):
 
 
 @click.command()
-@click.argument("domain", nargs=-1)
-def main(domain):
+@click.option("-m/-w", "--multi/--with-www", default=False)
+@click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
+def main(domains, multi):
     """Creates a certificate for one or more domains."""
     base = Path.cwd()
-    if domain:
-        generate(base, domain)
+    if domains:
+        generate(base, domains, multi)
 
 
 if __name__ == '__main__':
