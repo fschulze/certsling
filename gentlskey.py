@@ -17,103 +17,104 @@ def fatal(msg, code=3):
     sys.exit(code)
 
 
-def genkey(key_base, date, main):
-    fn = key_base.joinpath("%s.key" % main)
+def ensure_not_empty(fn):
     if fn.exists():
-        print("Using existing key '%s'." % fn.relative_to(Path.cwd()))
+        with fn.open('rb') as f:
+            l = len(f.read().strip())
+        if l:
+            return True
+        fn.unlink()
+    return False
+
+
+def file_generator(base, name):
+    def generator(description, ext, generate, *args, **kw):
+        fn = base.joinpath("%s%s" % (name, ext))
+        rel = fn.relative_to(Path.cwd())
+        if ensure_not_empty(fn):
+            click.echo(click.style(
+                "Using existing %s '%s'." % (description, rel), fg='green'))
+            return fn
+        click.echo("Writing %s '%s'." % (description, rel))
+        generate(fn, *args, **kw)
         return fn
-    fn_date = key_base.joinpath("%s-%s.key" % (main, date))
-    if not fn_date.exists():
-        print("Generating key '%s'." % fn_date.relative_to(Path.cwd()))
-        subprocess.check_call([
-            OPENSSL, 'genrsa', '-out', str(fn_date), '4096'])
-    if fn_date.exists():
-        print("Linking key '%s'." % fn_date.relative_to(Path.cwd()))
-        fn.symlink_to(fn_date.name)
-    return fn
+    return generator
 
 
-def gencsr(key_base, date, key, main, domains):
-    fn = key_base.joinpath("%s.csr" % main)
-    if fn.exists():
-        print("Using existing csr '%s'." % fn.relative_to(Path.cwd()))
+def dated_file_generator(base, name, date):
+    def generator(description, ext, generate, *args, **kw):
+        fn = base.joinpath("%s%s" % (name, ext))
+        rel = fn.relative_to(Path.cwd())
+        if ensure_not_empty(fn):
+            click.echo(click.style(
+                "Using existing %s '%s'." % (description, rel), fg='green'))
+            return fn
+        fn_date = base.joinpath("%s-%s%s" % (name, date, ext))
+        rel_date = fn_date.relative_to(Path.cwd())
+        if not ensure_not_empty(fn):
+            click.echo("Generating %s '%s'." % (description, rel_date))
+            generate(fn_date, *args, **kw)
+        if fn_date.exists():
+            click.echo("Linking %s '%s'." % (description, rel_date))
+            fn.symlink_to(fn_date.name)
         return fn
-    fn_date = key_base.joinpath("%s-%s.csr" % (main, date))
-    if not fn_date.exists():
-        print("Generating csr '%s'." % fn_date.relative_to(Path.cwd()))
-        if domains:
-            config_fn = key_base.joinpath('openssl.cnf')
-            with config_fn.open('wb') as config:
-                with OPENSSL_CONF.open('rb') as f:
-                    data = f.read()
-                    config.write(data)
-                    if not data.endswith(b'\n'):
-                        config.write(b'\n')
-                dns = ','.join('DNS:%s' % x for x in [main] + domains)
-                lines = ['', '[SAN]', 'subjectAltName = %s' % dns, '']
-                config.write(bytes('\n'.join(lines).encode('ascii')))
-            subprocess.check_call([
-                OPENSSL, 'req', '-sha256', '-new',
-                '-key', str(key), '-out', str(fn_date), '-subj', '/',
-                '-reqexts', 'SAN', '-config', str(config_fn)])
-        else:
-            subprocess.check_call([
-                OPENSSL, 'req', '-sha256', '-new',
-                '-key', str(key), '-out', str(fn_date),
-                '-subj', '/CN=%s' % main])
-    if fn_date.exists():
-        print("Linking csr '%s'." % fn_date.relative_to(Path.cwd()))
-        fn.symlink_to(fn_date.name)
-    return fn
+    return generator
 
 
-def verify(csr):
+def genkey(fn):
     subprocess.check_call([
-        OPENSSL, 'req', '-text', '-noout', '-verify', '-in', str(csr)])
+        OPENSSL, 'genrsa', '-out', str(fn), '4096'])
 
 
-def gencrt(key_base, date, csr, user_pub, main):
-    fn = key_base.joinpath("%s.crt" % main)
-    if fn.exists():
-        print("Using existing crt '%s'." % fn.relative_to(Path.cwd()))
-        return fn
-    fn_date = key_base.joinpath("%s-%s.crt" % (main, date))
-    if not fn_date.exists():
-        print("Generating csr '%s'." % fn_date.relative_to(Path.cwd()))
-        with fn_date.open('wb') as f:
-            subprocess.check_call([
-                'python2.7', str(SIGN_CSR),
-                '--public-key', str(user_pub), str(csr)],
-                stdout=f)
-    if fn_date.exists():
-        print("Linking crt '%s'." % fn_date.relative_to(Path.cwd()))
-        fn.symlink_to(fn_date.name)
-    return fn
+def genpub(fn, key):
+    subprocess.check_call([
+        OPENSSL, 'rsa', '-in', str(key), '-pubout', '-out', str(fn)])
 
 
-def getpem(base, date):
-    main = 'lets-encrypt-x1-cross-signed'
-    fn = base.joinpath("%s.pem" % main)
-    if fn.exists():
-        print("Using existing pem '%s'." % fn.relative_to(Path.cwd()))
-        return fn
-    fn_date = base.joinpath("%s-%s.pem" % (main, date))
-    if not fn_date.exists():
-        print("Generating pem '%s'." % fn_date.relative_to(Path.cwd()))
+def gencsr(fn, key, domains):
+    if domains:
+        config_fn = fn.parent.joinpath('openssl.cnf')
+        with config_fn.open('wb') as config:
+            with OPENSSL_CONF.open('rb') as f:
+                data = f.read()
+                config.write(data)
+                if not data.endswith(b'\n'):
+                    config.write(b'\n')
+            dns = ','.join('DNS:%s' % x for x in [main] + domains)
+            lines = ['', '[SAN]', 'subjectAltName = %s' % dns, '']
+            config.write(bytes('\n'.join(lines).encode('ascii')))
         subprocess.check_call([
-            CURL, '-o', str(fn_date), 'https://letsencrypt.org/certs/%s.pem' % main])
-    if fn_date.exists():
-        print("Linking pem '%s'." % fn_date.relative_to(Path.cwd()))
-        fn.symlink_to(fn_date.name)
-    return fn
+            OPENSSL, 'req', '-sha256', '-new',
+            '-key', str(key), '-out', str(fn), '-subj', '/',
+            '-reqexts', 'SAN', '-config', str(config_fn)])
+    else:
+        subprocess.check_call([
+            OPENSSL, 'req', '-sha256', '-new',
+            '-key', str(key), '-out', str(fn),
+            '-subj', '/CN=%s' % main])
 
 
-def chain(key_base, crt, pem, main):
-    fn = key_base.joinpath("%s-chained.crt" % main)
-    if fn.exists():
-        print("Using existing chained crt '%s'." % fn.relative_to(Path.cwd()))
-        return fn
-    print("Writing chained crt '%s'." % fn.relative_to(Path.cwd()))
+def verify_csr(csr):
+    subprocess.check_call([
+        OPENSSL, 'req', '-noout', '-verify', '-in', str(csr)])
+
+
+def gencrt(fn, csr, user_pub, email):
+    with fn.open('wb') as f:
+        subprocess.check_call([
+            'python2.7', str(SIGN_CSR),
+            '--public-key', str(user_pub),
+            '--email', email,
+            str(csr)],
+            stdout=f)
+
+
+def getpem(fn):
+    subprocess.check_call([
+        CURL, '-o', str(fn), 'https://letsencrypt.org/certs/%s.pem' % main])
+
+
+def chain(fn, crt, pem):
     with fn.open('wb') as out:
         for name in (crt, pem):
             with name.open('rb') as f:
@@ -121,13 +122,13 @@ def chain(key_base, crt, pem, main):
                 out.write(data)
                 if not data.endswith(b'\n'):
                     out.write(b'\n')
-    return fn
 
 
 def generate(base, domains):
-    user_pub = base.joinpath('user.pub')
-    if not user_pub.exists():
-        fatal("No 'user.pub' in current directory.", code=10)
+    user_key = file_generator(base, 'user')(
+        'private user key', '.key', genkey)
+    user_pub = file_generator(base, 'user')(
+        'public user key', '.pub', genpub, user_key)
     if not SIGN_CSR.exists():
         fatal("No 'letsencrypt-nosudo' in '%s' directory." % BASE, code=10)
     domains = sorted(domains, key=len)
@@ -139,12 +140,15 @@ def generate(base, domains):
     if not key_base.exists():
         key_base.mkdir()
     date = datetime.date.today().strftime("%Y%m%d")
-    key = genkey(key_base, date, main)
-    csr = gencsr(key_base, date, key, main, domains)
-    verify(csr)
-    crt = gencrt(key_base, date, csr, user_pub, main)
-    pem = getpem(base, date)
-    chain(key_base, crt, pem, main)
+    date_gen = dated_file_generator(key_base, main, date)
+    key = date_gen('key', '.key', genkey)
+    csr = date_gen('csr', '.csr', gencsr, key, domains)
+    verify_csr(csr)
+    crt = date_gen('crt', '.crt', gencrt, csr, user_pub, base.stem)
+    pem = dated_file_generator(
+        base, 'lets-encrypt-x1-cross-signed', date)('pem', '.pem', getpem)
+    file_generator(key_base, main)(
+        'chained crt', '.crt', chain, crt, pem)
 
 
 @click.command()
