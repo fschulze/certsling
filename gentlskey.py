@@ -220,7 +220,8 @@ class ACME:
     def __init__(self, priv, pub):
         self.priv = priv
         self.pub = pub
-        res = requests.head(CA + '/directory')
+        self.session = requests.Session()
+        res = self.session.head(CA + '/directory')
         res.raise_for_status()
         self.nonce = res.headers['Replay-Nonce']
 
@@ -280,7 +281,7 @@ class ACME:
             payload=payload,
             signature=b64(self.sign(protected, payload)))
         try:
-            res = requests.post(url, json=data)
+            res = self.session.post(url, json=data)
             if 'Replay-Nonce' in res.headers:
                 self.nonce = res.headers['Replay-Nonce']
             content_type = res.headers.get('Content-Type', '')
@@ -320,7 +321,7 @@ class ACME:
             keyAuthorization=authorization)))
         while 1:
             time.sleep(1)
-            res = requests.get(challenge['uri'])
+            res = self.session.get(challenge['uri'])
             try:
                 if 'Replay-Nonce' in res.headers:
                     self.nonce = res.headers['Replay-Nonce']
