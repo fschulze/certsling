@@ -93,16 +93,23 @@ def file_generator(base, name):
     return generator
 
 
-def dated_file_generator(base, name, date):
+def dated_file_generator(base, name, date, current=False):
     def generator(description, ext, generate, *args, **kw):
         fn = base.joinpath("%s%s" % (name, ext))
         rel = fn.relative_to(Path.cwd())
-        if ensure_not_empty(fn):
-            click.echo(click.style(
-                "Using existing %s '%s'." % (description, rel), fg='green'))
-            return fn
         fn_date = base.joinpath("%s-%s%s" % (name, date, ext))
         rel_date = fn_date.relative_to(Path.cwd())
+        if current == 'force' and fn.exists():
+            click.echo("Unlinking existing %s '%s'." % (description, rel))
+            fn.unlink()
+        if ensure_not_empty(fn):
+            if not current or fn.resolve() == fn_date:
+                click.echo(click.style(
+                    "Using existing %s '%s'." % (description, rel), fg='green'))
+                return fn
+            elif fn.exists():
+                click.echo("Unlinking existing %s '%s'." % (description, rel))
+                fn.unlink()
         if not ensure_not_empty(fn):
             click.echo("Generating %s '%s'." % (description, rel_date))
             generate(fn_date, *args, **kw)
@@ -420,7 +427,7 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains, multi):
+def generate(base, domains, multi, regenerate):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
@@ -435,8 +442,10 @@ def generate(base, domains, multi):
     if not key_base.exists():
         key_base.mkdir()
     date = datetime.date.today().strftime("%Y%m%d")
-    date_gen = dated_file_generator(key_base, main, date)
-    key = date_gen('key', '.key', genkey)
+    key = dated_file_generator(key_base, main, date)(
+        'key', '.key', genkey)
+    current = 'force' if regenerate else True
+    date_gen = dated_file_generator(key_base, main, date, current=current)
     csr = date_gen('csr', '.csr', gencsr, key, domains)
     if not verify_csr(csr, domains):
         remove(key_base, '*.csr', '*.crt', '*.der')
@@ -452,12 +461,18 @@ def generate(base, domains, multi):
 
 @click.command()
 @click.option("-m/-w", "--multi/--with-www", default=False)
+@click.option(
+    "-r/-R", "--regenerate/--dont-regenerate", default=False,
+    help="Force creating a new certificate even if one for the current day exists.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, multi):
-    """Creates a certificate for one or more domains."""
+def main(domains, multi, regenerate):
+    """Creates a certificate for one or more domains.
+
+    By default a new certificate is generated, except when running again on
+    the same day."""
     base = Path.cwd()
     if domains:
-        generate(base, domains, multi)
+        generate(base, domains, multi, regenerate)
 
 
 if __name__ == '__main__':
