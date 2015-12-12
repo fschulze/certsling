@@ -224,7 +224,8 @@ class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
 
 class ACME:
-    def __init__(self, priv, pub):
+    def __init__(self, base, priv, pub):
+        self.base = base
         self.priv = priv
         self.pub = pub
         self.session = requests.Session()
@@ -311,13 +312,34 @@ class ACME:
             contact=["mailto:" + email],
             agreement=TERMS), indent=4))
 
+    def challenge_info(self, domain):
+        challenge_info_fn = self.base.joinpath("%s.challenge_info.json" % domain)
+        challenge_info = {}
+        if challenge_info_fn.exists():
+            with challenge_info_fn.open() as f:
+                challenge_info = json.load(f)
+        expires = datetime.datetime.strptime(
+            challenge_info['expires'].split('.')[0],
+            '%Y-%m-%dT%H:%M:%S')
+        if (expires - datetime.datetime.now()).total_seconds() < 300:
+            challenge_info = {}
+        if not challenge_info:
+            challenge_info = self.request(CA + "/acme/new-authz", self.dump(dict(
+                resource="new-authz",
+                identifier=dict(
+                    type="dns",
+                    value=domain))))
+        json_data = json.dumps(challenge_info, sort_keys=True, indent=4)
+        with challenge_info_fn.open('w') as f:
+            f.write(json_data)
+        return challenge_info
+
     def authz(self, domain, tokens):
-        resp = self.request(CA + "/acme/new-authz", self.dump(dict(
-            resource="new-authz",
-            identifier=dict(
-                type="dns",
-                value=domain))))
-        challenges = [x for x in resp['challenges'] if x['type'] == "http-01"]
+        challenge_info = self.challenge_info(domain)
+        challenges = [
+            x
+            for x in challenge_info['challenges']
+            if x['type'] == "http-01"]
         if len(challenges) != 1:
             fatal("Couldn't get 'http-01' challenge")
         challenge = challenges[0]
@@ -358,13 +380,14 @@ def gencrt(fn, der, user_key, user_pub, email, domains):
         pub = serialization.load_pem_public_key(f.read(), backend)
     with der.open('rb') as f:
         der_data = f.read()
+    base = der.parent
     address = ('localhost', 8080)
     server = http.server.HTTPServer(address, HTTPRequestHandler)
     server.tokens = dict()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     click.echo("Starting server on %s:%s" % address)
     thread.start()
-    acme = ACME(priv, pub)
+    acme = ACME(base, priv, pub)
     click.echo("Registering at letsencrypt.")
     acme.reg(email)
     click.echo("Preparing challenges for %s." % ', '.join(domains))
