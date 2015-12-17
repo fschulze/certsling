@@ -281,7 +281,7 @@ class ACME:
                     sig_fn.unlink()
         return sig
 
-    def request(self, url, payload):
+    def request(self, url, payload, expect_error=False):
         protected = self.protected()
         data = dict(
             header=self.header(),
@@ -303,7 +303,13 @@ class ACME:
                     return
             res.raise_for_status()
         except:
-            fatal('Request to %s failed (%s): %s\n%s' % (url, res.status_code, res.reason, json.dumps(resp, sort_keys=True, indent=4)))
+            if not expect_error:
+                click.echo(click.style(
+                    'Request to %s failed (%s): %s\n%s' % (
+                        url, res.status_code, res.reason,
+                        json.dumps(resp, sort_keys=True, indent=4)),
+                    fg="red"))
+            raise
         return resp
 
     def reg(self, email):
@@ -312,26 +318,52 @@ class ACME:
             contact=["mailto:" + email],
             agreement=TERMS), indent=4))
 
-    def challenge_info(self, domain):
-        challenge_info_fn = self.base.joinpath("%s.challenge_info.json" % domain)
+    def challenge_info_fn(self, domain):
+        return self.base.joinpath("%s.challenge_info.json" % domain)
+
+    def load_challenge_info(self, domain):
+        challenge_info_fn = self.challenge_info_fn(domain)
         challenge_info = {}
         if challenge_info_fn.exists():
             with challenge_info_fn.open() as f:
                 challenge_info = json.load(f)
-        expires = datetime.datetime.strptime(
-            challenge_info['expires'].split('.')[0],
-            '%Y-%m-%dT%H:%M:%S')
-        if (expires - datetime.datetime.now()).total_seconds() < 300:
+        if not all(x['uri'].startswith(CA) for x in challenge_info.get('challenges', [])):
             challenge_info = {}
+        if 'expires' in challenge_info:
+            expires = datetime.datetime.strptime(
+                challenge_info['expires'].split('.')[0],
+                '%Y-%m-%dT%H:%M:%S')
+            if (expires - datetime.datetime.now()).total_seconds() < 300:
+                challenge_info = {}
+        return challenge_info
+
+    def dump_challenge_info(self, domain, challenge_info):
+        challenge_info_fn = self.challenge_info_fn(domain)
+        json_data = json.dumps(challenge_info, sort_keys=True, indent=4)
+        with challenge_info_fn.open('w') as f:
+            f.write(json_data)
+        return challenge_info
+
+    def update_challenge_info(self, domain, updated_challenge):
+        challenge_info = self.load_challenge_info(domain)
+        challenges = challenge_info.get('challenges', [])
+        if not challenges:
+            return
+        for challenge in challenges:
+            if challenge.get('type') == updated_challenge.get('type'):
+                if challenge.get('token') == updated_challenge.get('token'):
+                    challenge.update(updated_challenge)
+        self.dump_challenge_info(domain, challenge_info)
+
+    def challenge_info(self, domain):
+        challenge_info = self.load_challenge_info(domain)
         if not challenge_info:
             challenge_info = self.request(CA + "/acme/new-authz", self.dump(dict(
                 resource="new-authz",
                 identifier=dict(
                     type="dns",
                     value=domain))))
-        json_data = json.dumps(challenge_info, sort_keys=True, indent=4)
-        with challenge_info_fn.open('w') as f:
-            f.write(json_data)
+        self.dump_challenge_info(domain, challenge_info)
         return challenge_info
 
     def authz(self, domain, tokens):
@@ -345,9 +377,22 @@ class ACME:
         challenge = challenges[0]
         authorization = "{}.{}".format(challenge['token'], self.thumbprint())
         tokens[challenge['token']] = authorization.encode('ascii')
-        resp = self.request(challenge['uri'], self.dump(dict(
-            resource="challenge",
-            keyAuthorization=authorization)))
+        try:
+            resp = self.request(
+                challenge['uri'],
+                self.dump(dict(
+                    resource="challenge",
+                    keyAuthorization=authorization)),
+                expect_error=True)
+        except requests.exceptions.HTTPError as e:
+            res = e.response
+            info = res.json()
+            if info.get('status') == 400 and 'Response does not complete challenge' in info['detail']:
+                pass
+            else:
+                fatal('Request to %s failed (%s): %s\n%s' % (
+                    challenge['uri'], res.status_code, res.reason,
+                    json.dumps(info, sort_keys=True, indent=4)))
         while 1:
             time.sleep(1)
             res = self.session.get(challenge['uri'])
@@ -362,9 +407,10 @@ class ACME:
                 click.echo('Waiting for response ...')
                 continue
             elif resp['status'] == 'valid':
-                return
+                break
             else:
                 fatal("Challenge for %s did not pass: %s" % (domain, resp['status']))
+        self.update_challenge_info(domain, resp)
 
     def cert(self, der):
         return self.request(CA + "/acme/new-cert", self.dump(dict(
