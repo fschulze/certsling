@@ -304,11 +304,10 @@ class ACME:
             res.raise_for_status()
         except:
             if not expect_error:
-                click.echo(click.style(
+                fatal(
                     'Request to %s failed (%s): %s\n%s' % (
                         url, res.status_code, res.reason,
-                        json.dumps(resp, sort_keys=True, indent=4)),
-                    fg="red"))
+                        json.dumps(resp, sort_keys=True, indent=4)))
             raise
         return resp
 
@@ -366,50 +365,77 @@ class ACME:
         self.dump_challenge_info(domain, challenge_info)
         return challenge_info
 
-    def authz(self, domain, tokens):
-        challenge_info = self.challenge_info(domain)
-        challenges = [
-            x
-            for x in challenge_info['challenges']
-            if x['type'] == "http-01"]
-        if len(challenges) != 1:
-            fatal("Couldn't get 'http-01' challenge")
-        challenge = challenges[0]
-        authorization = "{}.{}".format(challenge['token'], self.thumbprint())
-        tokens[challenge['token']] = authorization.encode('ascii')
-        try:
-            resp = self.request(
-                challenge['uri'],
-                self.dump(dict(
-                    resource="challenge",
-                    keyAuthorization=authorization)),
-                expect_error=True)
-        except requests.exceptions.HTTPError as e:
-            res = e.response
-            info = res.json()
-            if info.get('status') == 400 and 'Response does not complete challenge' in info['detail']:
-                pass
-            else:
-                fatal('Request to %s failed (%s): %s\n%s' % (
-                    challenge['uri'], res.status_code, res.reason,
-                    json.dumps(info, sort_keys=True, indent=4)))
-        while 1:
-            time.sleep(1)
-            res = self.session.get(challenge['uri'])
+    def wait_for_challenge_response(self, uri, timeout):
+        while timeout:
+            res = self.session.get(uri)
             try:
                 if 'Replay-Nonce' in res.headers:
                     self.nonce = res.headers['Replay-Nonce']
                 resp = json.loads(res.text)
                 res.raise_for_status()
             except:
-                fatal('Request to %s failed (%s): %s\n%s' % (challenge['uri'], res.status_code, res.reason, res.text))
+                fatal('Request to %s failed (%s): %s\n%s' % (uri, res.status_code, res.reason, res.text))
             if resp['status'] == 'pending':
                 click.echo('Waiting for response ...')
+                time.sleep(1)
+                timeout = timeout - 1
                 continue
             elif resp['status'] == 'valid':
+                return resp
+            return resp
+
+    def authz(self, domain, tokens):
+        challenge_info = self.challenge_info(domain)
+        resp = None
+        for challenge in challenge_info.get('challenges', []):
+            if challenge['type'] not in ('http-01',):
+                continue
+            click.echo(click.style(
+                "Trying challenge type '%s'." % challenge['type'],
+                fg="green"))
+            authorization = "{}.{}".format(challenge['token'], self.thumbprint())
+            if challenge['type'] == 'dns-01':
+                digest = hashlib.sha256(authorization.encode('ascii')).digest()
+                txt = base64.b64encode(digest).decode('ascii')
+                click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
+            elif challenge['type'] == 'http-01':
+                tokens[challenge['token']] = authorization.encode('ascii')
+            try:
+                self.request(
+                    challenge['uri'],
+                    self.dump(dict(
+                        resource="challenge",
+                        keyAuthorization=authorization)),
+                    expect_error=True)
+                time.sleep(1)
+            except requests.exceptions.HTTPError as e:
+                res = e.response
+                info = res.json()
+                if info.get('status') == 400 and 'Response does not complete challenge' in info['detail']:
+                    pass
+                elif info.get('status') == 400 and 'Challenge data was corrupted' in info['detail']:
+                    continue
+                else:
+                    fatal('Request to %s failed (%s): %s\n%s' % (
+                        challenge['uri'], res.status_code, res.reason,
+                        json.dumps(info, sort_keys=True, indent=4)))
+            resp = self.wait_for_challenge_response(challenge['uri'], 15)
+            if resp['status'] == 'invalid':
+                click.echo(click.style("Challenge invalid.", fg="yellow"))
+                continue
+            elif resp['status'] == 'valid':
+                click.echo(click.style("Challenge valid.", fg="green"))
                 break
-            else:
-                fatal("Challenge for %s did not pass: %s" % (domain, resp['status']))
+            elif resp['status'] == 'pending':
+                click.echo(click.style("Challenge timed out."), fg="yellow")
+                continue
+            elif resp['status'] != 'valid':
+                fatal("Challenge for %s did not pass: %s" % (
+                    domain, json.dumps(resp, sort_keys=True, indent=4)))
+        if resp is None or resp['status'] != 'valid':
+            if resp is not None and 'error' in resp and 'detail' in resp['error']:
+                click.echo(click.style(resp['error']['detail'], fg='red'))
+                return
         self.update_challenge_info(domain, resp)
 
     def cert(self, der):
