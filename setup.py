@@ -21,4 +21,4 @@ setup(
         'requests'],
     entry_points={
         'console_scripts': ['letsencrypt-remote = letsencrypt_remote:main']},
-    pyackages=['letsencrypt_remote'])
+    py_modules=['letsencrypt_remote'])
