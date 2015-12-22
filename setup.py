@@ -7,7 +7,7 @@ README = open(os.path.abspath('README.rst')).read()
 
 setup(
     name='letsencrypt-remote',
-    version='0.3.0',
+    version='0.3.1',
     long_description="\n\n".join([README]),
     classifiers=[
         "Development Status :: 4 - Beta",
