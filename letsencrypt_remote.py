@@ -344,10 +344,6 @@ class ACME:
                 resp = res.json()
             elif content_type == 'application/pkix-cert':
                 resp = res.content
-            if res.status_code == 409:
-                if resp.get('detail') == 'Registration key is already in use':
-                    click.echo(click.style("Already registered.", fg='green'))
-                    return
             res.raise_for_status()
         except:
             if not expect_error:
@@ -359,10 +355,32 @@ class ACME:
         return resp
 
     def reg(self, email):
-        self.request(CA + "/acme/new-reg", self.dump(dict(
-            resource="new-reg",
-            contact=["mailto:" + email],
-            agreement=TERMS), indent=4))
+        try:
+            self.request(
+                CA + "/acme/new-reg",
+                self.dump(dict(
+                    resource="new-reg",
+                    contact=["mailto:" + email],
+                    agreement=TERMS), indent=4),
+                expect_error=True)
+        except requests.exceptions.HTTPError as e:
+            res = e.response
+            if res.status_code != 409:
+                raise
+            content_type = res.headers.get('Content-Type', '')
+            if content_type not in ('application/json', 'application/problem+json'):
+                raise
+            resp = res.json()
+            if resp.get('detail') != 'Registration key is already in use':
+                raise
+            click.echo(click.style("Already registered.", fg='green'))
+            uri = res.headers.get('Location', '')
+            click.echo("Registration URI: %s" % uri)
+            info = self.request(uri, self.dump(dict(resource="reg")))
+            click.echo("Registered on %s via %s" % (
+                info["createdAt"], info["initialIp"]))
+            click.echo("Contact: %s" % ", ".join(info["contact"]))
+            click.echo("Agreement: %s" % info["agreement"])
 
     def challenge_info_fn(self, domain):
         return self.base.joinpath("%s.challenge_info.json" % domain)
