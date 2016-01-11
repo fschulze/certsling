@@ -3,12 +3,13 @@ import os
 
 
 README = open(os.path.abspath('README.rst')).read()
+HISTORY = open(os.path.abspath('HISTORY.rst')).read()
 
 
 setup(
     name='letsencrypt-remote',
-    version='0.3.1',
-    long_description="\n\n".join([README]),
+    version='0.4.0',
+    long_description="\n\n".join([README, HISTORY]),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: System Administrators",
