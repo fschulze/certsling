@@ -410,8 +410,7 @@ class ACME:
             f.write(json_data)
         return challenge_info
 
-    def update_challenge_info(self, domain, updated_challenge):
-        challenge_info = self.load_challenge_info(domain)
+    def update_challenge_info(self, challenge_info, domain, updated_challenge):
         challenges = challenge_info.get('challenges', [])
         if not challenges:
             return
@@ -451,62 +450,68 @@ class ACME:
                 return resp
             return resp
 
+    def handle_challenge(self, challenge_info, challenge, domain, tokens):
+        click.echo(click.style(
+            "Trying challenge type '%s'." % challenge['type'],
+            fg="green"))
+        authorization = "{}.{}".format(challenge['token'], self.thumbprint())
+        if challenge['type'] == 'dns-01':
+            digest = hashlib.sha256(authorization.encode('ascii')).digest()
+            txt = b64(digest)
+            click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
+            tokens[dns.name.from_text(domain)] = txt
+        elif challenge['type'] == 'http-01':
+            tokens[challenge['token']] = authorization.encode('ascii')
+        try:
+            self.request(
+                challenge['uri'],
+                self.dump(dict(
+                    resource="challenge",
+                    keyAuthorization=authorization)),
+                expect_error=True)
+            time.sleep(1)
+        except requests.exceptions.HTTPError as e:
+            res = e.response
+            info = res.json()
+            if info.get('status') == 400 and 'Response does not complete challenge' in info['detail']:
+                click.echo(click.style(info['detail'], fg="yellow"))
+                pass
+            elif info.get('status') == 400 and 'Challenge data was corrupted' in info['detail']:
+                click.echo(click.style(info['detail'], fg="yellow"))
+                return False
+            else:
+                fatal('Request to %s failed (%s): %s\n%s' % (
+                    challenge['uri'], res.status_code, res.reason,
+                    json.dumps(info, sort_keys=True, indent=4)))
+        resp = self.wait_for_challenge_response(challenge['uri'], 15)
+        if resp is None:
+            return False
+        self.update_challenge_info(challenge_info, domain, resp)
+        if resp['status'] == 'invalid':
+            click.echo(click.style("Challenge invalid.", fg="yellow"))
+            if 'error' in resp and 'detail' in resp['error']:
+                click.echo(click.style(resp['error']['detail'], fg='yellow'))
+            return False
+        elif resp['status'] == 'valid':
+            click.echo(click.style("Challenge valid.", fg="green"))
+            return True
+        elif resp['status'] == 'pending':
+            click.echo(click.style("Challenge pending."), fg="yellow")
+            if 'error' in resp and 'detail' in resp['error']:
+                click.echo(click.style(resp['error']['detail'], fg='yellow'))
+            return False
+        elif resp['status'] != 'valid':
+            fatal("Challenge for %s did not pass: %s" % (
+                domain, json.dumps(resp, sort_keys=True, indent=4)))
+
     def authz(self, domain, tokens):
         challenge_info = self.challenge_info(domain)
-        resp = None
-        for challenge in challenge_info.get('challenges', []):
-            if challenge['type'] not in ('http-01',):
-                continue
-            click.echo(click.style(
-                "Trying challenge type '%s'." % challenge['type'],
-                fg="green"))
-            authorization = "{}.{}".format(challenge['token'], self.thumbprint())
-            if challenge['type'] == 'dns-01':
-                digest = hashlib.sha256(authorization.encode('ascii')).digest()
-                txt = b64(digest)
-                click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
-                tokens[dns.name.from_text(domain)] = txt
-            elif challenge['type'] == 'http-01':
-                tokens[challenge['token']] = authorization.encode('ascii')
-            try:
-                self.request(
-                    challenge['uri'],
-                    self.dump(dict(
-                        resource="challenge",
-                        keyAuthorization=authorization)),
-                    expect_error=True)
-                time.sleep(1)
-            except requests.exceptions.HTTPError as e:
-                res = e.response
-                info = res.json()
-                if info.get('status') == 400 and 'Response does not complete challenge' in info['detail']:
-                    click.echo(click.style(info['detail'], fg="yellow"))
-                    pass
-                elif info.get('status') == 400 and 'Challenge data was corrupted' in info['detail']:
-                    click.echo(click.style(info['detail'], fg="yellow"))
+        for challenge_type in ('dns-01', 'http-01'):
+            for challenge in challenge_info['challenges']:
+                if challenge['type'] != challenge_type:
                     continue
-                else:
-                    fatal('Request to %s failed (%s): %s\n%s' % (
-                        challenge['uri'], res.status_code, res.reason,
-                        json.dumps(info, sort_keys=True, indent=4)))
-            resp = self.wait_for_challenge_response(challenge['uri'], 15)
-            if resp['status'] == 'invalid':
-                click.echo(click.style("Challenge invalid.", fg="yellow"))
-                continue
-            elif resp['status'] == 'valid':
-                click.echo(click.style("Challenge valid.", fg="green"))
-                break
-            elif resp['status'] == 'pending':
-                click.echo(click.style("Challenge timed out."), fg="yellow")
-                continue
-            elif resp['status'] != 'valid':
-                fatal("Challenge for %s did not pass: %s" % (
-                    domain, json.dumps(resp, sort_keys=True, indent=4)))
-        if resp is None or resp['status'] != 'valid':
-            if resp is not None and 'error' in resp and 'detail' in resp['error']:
-                click.echo(click.style(resp['error']['detail'], fg='red'))
-                return
-        self.update_challenge_info(domain, resp)
+                if self.handle_challenge(challenge_info, challenge, domain, tokens):
+                    return
 
     def cert(self, der):
         return self.request(CA + "/acme/new-cert", self.dump(dict(
