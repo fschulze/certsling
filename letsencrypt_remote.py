@@ -412,8 +412,10 @@ class ACME:
                 res = e.response
                 info = res.json()
                 if info.get('status') == 400 and 'Response does not complete challenge' in info['detail']:
+                    click.echo(click.style(info['detail'], fg="yellow"))
                     pass
                 elif info.get('status') == 400 and 'Challenge data was corrupted' in info['detail']:
+                    click.echo(click.style(info['detail'], fg="yellow"))
                     continue
                 else:
                     fatal('Request to %s failed (%s): %s\n%s' % (
