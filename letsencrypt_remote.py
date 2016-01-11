@@ -224,10 +224,11 @@ class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
 
 class ACME:
-    def __init__(self, base, priv, pub):
+    def __init__(self, base, priv, pub, current=False):
         self.base = base
         self.priv = priv
         self.pub = pub
+        self.current = current
         self.session = requests.Session()
         res = self.session.head(CA + '/directory')
         res.raise_for_status()
@@ -323,7 +324,9 @@ class ACME:
     def load_challenge_info(self, domain):
         challenge_info_fn = self.challenge_info_fn(domain)
         challenge_info = {}
-        if challenge_info_fn.exists():
+        if self.current is True and challenge_info_fn.exists():
+            click.echo(click.style(
+                "Using existing challenge info for '%s'." % domain, fg="green"))
             with challenge_info_fn.open() as f:
                 challenge_info = json.load(f)
         if not all(x['uri'].startswith(CA) for x in challenge_info.get('challenges', [])):
@@ -446,7 +449,7 @@ class ACME:
             csr=b64(der))))
 
 
-def gencrt(fn, der, user_key, user_pub, email, domains):
+def gencrt(fn, der, user_key, user_pub, email, domains, current=False):
     backend = default_backend()
     with user_key.open('rb') as f:
         priv = serialization.load_pem_private_key(f.read(), None, backend)
@@ -461,7 +464,7 @@ def gencrt(fn, der, user_key, user_pub, email, domains):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     click.echo("Starting server on %s:%s" % address)
     thread.start()
-    acme = ACME(base, priv, pub)
+    acme = ACME(base, priv, pub, current=current)
     click.echo("Registering at letsencrypt.")
     acme.reg(email)
     click.echo("Preparing challenges for %s." % ', '.join(domains))
@@ -547,7 +550,7 @@ def generate(base, domains, multi, regenerate):
     if not verify_csr(csr, domains):
         remove(key_base, '*.csr', '*.crt', '*.der')
     der = date_gen('der', '.der', gender, csr)
-    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains)
+    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, current=current)
     if not verify_crt(crt, domains):
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
