@@ -674,17 +674,13 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains, challenges, multi, regenerate):
+def generate(base, domains, challenges, regenerate):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
         'public user key', '.pub', genpub, user_key)
     domains = sorted(domains, key=len)
     main = domains[0]
-    if not multi:
-        for domain in domains[1:]:
-            if not domain.endswith("." + main):
-                fatal("Domain '%s' isn't a subdomain of '%s'.")
     key_base = base.joinpath(main)
     if not key_base.exists():
         key_base.mkdir()
@@ -707,7 +703,6 @@ def generate(base, domains, challenges, multi, regenerate):
 
 
 @click.command()
-@click.option("-m/-w", "--multi/--with-www", default=False)
 @click.option(
     "--dns/--no-dns", default=False,
     help="Try DNS challenge if HTTP challenge fails")
@@ -715,7 +710,7 @@ def generate(base, domains, challenges, multi, regenerate):
     "-r/-R", "--regenerate/--dont-regenerate", default=False,
     help="Force creating a new certificate even if one for the current day exists.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, multi, regenerate):
+def main(domains, dns, regenerate):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
@@ -725,7 +720,7 @@ def main(domains, dns, multi, regenerate):
     if dns:
         challenges.append('dns-01')
     if domains:
-        generate(base, domains, challenges, multi, regenerate)
+        generate(base, domains, challenges, regenerate)
 
 
 if __name__ == '__main__':
