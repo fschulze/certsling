@@ -445,8 +445,9 @@ class ACME:
             authorization = "{}.{}".format(challenge['token'], self.thumbprint())
             if challenge['type'] == 'dns-01':
                 digest = hashlib.sha256(authorization.encode('ascii')).digest()
-                txt = base64.b64encode(digest).decode('ascii')
+                txt = b64(digest)
                 click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
+                tokens[dns.name.from_text(domain)] = txt
             elif challenge['type'] == 'http-01':
                 tokens[challenge['token']] = authorization.encode('ascii')
             try:
