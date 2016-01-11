@@ -6,10 +6,15 @@ import base64
 import binascii
 import click
 import datetime
+import dns.message
+import dns.name
+import dns.rdtypes.ANY.TXT
+import dns.rrset
 import hashlib
 import http.server
 import json
 import requests
+import socket
 import subprocess
 import sys
 import tempfile
@@ -206,6 +211,39 @@ def b64(data):
     return base64.urlsafe_b64encode(data).replace(b"=", b"").decode('ascii')
 
 
+def dumps(**kw):
+    return b64(json.dumps(dict(**kw), sort_keys=True).encode('utf-8'))
+
+
+def _leading_zeros(arg):
+    if len(arg) % 2:
+        return '0' + arg
+    return arg
+
+
+def _encode(data):
+    return b64(binascii.unhexlify(
+        _leading_zeros(hex(data)[2:].rstrip('L'))))
+
+
+def get_jwk(user_pub):
+    backend = default_backend()
+    with user_pub.open('rb') as f:
+        pub = serialization.load_pem_public_key(f.read(), backend)
+        pub_numbers = pub.public_numbers()
+        return dict(
+            kty="RSA",
+            e=_encode(pub_numbers.e),
+            n=_encode(pub_numbers.n))
+
+
+def is_expired(expires):
+    expires = datetime.datetime.strptime(
+        expires.split('.')[0].rstrip('Z'),
+        '%Y-%m-%dT%H:%M:%S')
+    return (expires - datetime.datetime.now()).total_seconds() < 300
+
+
 class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parts = self.path.split('/')
@@ -223,256 +261,365 @@ class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(self.server.tokens[token])
 
 
+class DNSServer:
+    def __init__(self, address):
+        self.address = address
+
+    def handle_request(self, addr, data):
+        query = dns.message.from_wire(data)
+        response = dns.message.make_response(query)
+        for question in query.question:
+            if question.rdtype != 16:
+                continue
+            if question.name.labels[0].lower() != b'_acme-challenge':
+                continue
+            domain = question.name.parent()
+            print('Got request from %s for domain %s.' % (addr, domain))
+            if domain not in self.tokens:
+                continue
+            txt = self.tokens[domain]
+            print('Answering with "%s" to %s for domain %s.' % (txt, addr, domain))
+            response.answer.append(dns.rrset.from_rdata(
+                question.name,
+                0,
+                dns.rdtypes.ANY.TXT.TXT(
+                    question.rdclass, question.rdtype, txt)))
+        return response.to_wire()
+
+    def __call__(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(self.address)
+        except OSError as e:
+            fatal(str(e))
+        s.listen(1)
+        while 1:
+            conn, addr = s.accept()
+            with conn:
+                data = conn.recv(1024)
+                reply = self.handle_request(addr, data)
+                if reply is not None:
+                    conn.send(reply)
+
+
 class ACME:
-    def __init__(self, base, priv, pub, current=False):
+    def __init__(self, ca, base, priv, jwk, challenges, current=False):
+        self.ca = ca
         self.base = base
         self.priv = priv
-        self.pub = pub
-        self.current = current
-        self.session = requests.Session()
-        res = self.session.head(CA + '/directory')
-        res.raise_for_status()
-        self.nonce = res.headers['Replay-Nonce']
-
-    def _encode(cls, data):
-        def _leading_zeros(arg):
-            if len(arg) % 2:
-                return '0' + arg
-            return arg
-
-        return b64(binascii.unhexlify(
-            _leading_zeros(hex(data)[2:].rstrip('L'))))
-
-    def header(self):
-        numbers = self.pub.public_numbers()
-        return dict(
+        self.jwk = jwk
+        self.header = dict(
             alg="RS256",
-            jwk=dict(
-                kty="RSA",
-                e=self._encode(numbers.e),
-                n=self._encode(numbers.n)))
-
-    def thumbprint(self):
-        return b64(hashlib.sha256(json.dumps(
-            self.header()['jwk'],
+            jwk=self.jwk.copy())
+        self.thumbprint = b64(hashlib.sha256(json.dumps(
+            self.jwk,
             sort_keys=True,
             separators=(',', ':')).encode('ascii')).digest())
+        self.challenges = challenges
+        self.current = current
+        self.session = requests.Session()
+        self.session.hooks = dict(response=self.response_hook)
+        self.uris = {}
+        self.tokens = {}
 
-    def dump(self, data, indent=None):
-        return b64(json.dumps(data, sort_keys=True, indent=indent).encode('utf-8'))
+    def response_hook(self, response, *args, **kwargs):
+        if 'Replay-Nonce' in response.headers:
+            self.nonce = response.headers['Replay-Nonce']
+
+    def update_directory(self):
+        res = self.session.get(self.ca + '/directory')
+        content_type = res.headers.get('Content-Type')
+        if res.status_code != 200 or content_type != 'application/json':
+            fatal(
+                "Couldn't get directory from CA server '%s': %s %s" % (
+                    self.ca, res.status_code, res.reason))
+        self.uris.update(res.json())
 
     def protected(self):
-        data = self.header()
+        data = self.header.copy()
         data['nonce'] = self.nonce
-        return self.dump(data, indent=4)
+        return b64(json.dumps(data, sort_keys=True, indent=4).encode('utf-8'))
 
-    def sign(self, protected, payload):
-        sig_data = "%s.%s" % (protected, payload)
-        with tempfile.NamedTemporaryFile(dir=".", prefix="sign_", suffix=".json") as f:
-            f.write(sig_data.encode('ascii'))
-            f.flush()
-            sig_fn = Path(f.name).with_suffix('.sig')
-            try:
-                subprocess.check_call([
-                    OPENSSL, 'dgst', '-sha256', '-sign', 'user.key', '-out', str(sig_fn), f.name])
-                with sig_fn.open('rb') as f:
-                    sig = f.read()
-            finally:
-                if sig_fn.exists():
-                    sig_fn.unlink()
-        return sig
-
-    def request(self, url, payload, expect_error=False):
+    def dumps_signed(self, **kw):
+        payload = dumps(**kw)
         protected = self.protected()
+        sig_data = "%s.%s" % (protected, payload)
+        sig = OpenSSL.crypto.sign(
+            self.priv, sig_data.encode('ascii'), 'sha256')
         data = dict(
-            header=self.header(),
+            header=self.header.copy(),
             protected=protected,
             payload=payload,
-            signature=b64(self.sign(protected, payload)))
-        try:
-            res = self.session.post(url, json=data)
-            if 'Replay-Nonce' in res.headers:
-                self.nonce = res.headers['Replay-Nonce']
-            content_type = res.headers.get('Content-Type', '')
-            if content_type in ('application/json', 'application/problem+json'):
-                resp = res.json()
-            elif content_type == 'application/pkix-cert':
-                resp = res.content
-            if res.status_code == 409:
-                if resp.get('detail') == 'Registration key is already in use':
-                    click.echo(click.style("Already registered.", fg='green'))
-                    return
-            res.raise_for_status()
-        except:
-            if not expect_error:
-                fatal(
-                    'Request to %s failed (%s): %s\n%s' % (
-                        url, res.status_code, res.reason,
-                        json.dumps(resp, sort_keys=True, indent=4)))
-            raise
-        return resp
+            signature=b64(sig))
+        return data
 
-    def reg(self, email):
-        self.request(CA + "/acme/new-reg", self.dump(dict(
-            resource="new-reg",
-            contact=["mailto:" + email],
-            agreement=TERMS), indent=4))
+    def reg_post(self, uri, **kw):
+        response = self.session.post(uri, json=self.dumps_signed(**kw))
+        data = response.json()
+        if response.status_code == 202:
+            return data
+        else:
+            fatal("Got error while updating registration: %s %s\n%s" % (
+                response.status_code, response.reason,
+                json.dumps(data, sort_keys=True, indent=4)))
 
-    def challenge_info_fn(self, domain):
-        return self.base.joinpath("%s.challenge_info.json" % domain)
+    def new_reg_post(self, email):
+        response = self.session.post(
+            self.uris['new-reg'],
+            json=self.dumps_signed(
+                resource="new-reg",
+                contact=["mailto:" + email],
+                agreement=TERMS))
+        if response.status_code == 200:
+            info = response.json()
+        elif response.status_code == 409:
+            error = response.json()
+            if error.get('detail') != 'Registration key is already in use':
+                fatal("Got error during registration: %s %s\n%s" % (
+                    response.status_code, response.reason,
+                    json.dumps(error, sort_keys=True, indent=4)))
+            click.echo(click.style("Already registered.", fg='green'))
+            uri = response.headers.get('Location', '')
+            click.echo("Registration URI: %s" % uri)
+            info = self.reg_post(uri, resource="reg")
+        else:
+            fatal("Got unknown status during registration: %s %s" % (
+                response.status_code, response.reason))
+        return info
 
-    def load_challenge_info(self, domain):
-        challenge_info_fn = self.challenge_info_fn(domain)
-        challenge_info = {}
-        if self.current is True and challenge_info_fn.exists():
-            click.echo(click.style(
-                "Using existing challenge info for '%s'." % domain, fg="green"))
-            with challenge_info_fn.open() as f:
-                challenge_info = json.load(f)
-        if not all(x['uri'].startswith(CA) for x in challenge_info.get('challenges', [])):
-            challenge_info = {}
-        if 'expires' in challenge_info:
-            expires = datetime.datetime.strptime(
-                challenge_info['expires'].split('.')[0],
-                '%Y-%m-%dT%H:%M:%S')
-            if (expires - datetime.datetime.now()).total_seconds() < 300:
-                challenge_info = {}
-        return challenge_info
-
-    def dump_challenge_info(self, domain, challenge_info):
-        challenge_info_fn = self.challenge_info_fn(domain)
-        json_data = json.dumps(challenge_info, sort_keys=True, indent=4)
-        with challenge_info_fn.open('w') as f:
-            f.write(json_data)
-        return challenge_info
-
-    def update_challenge_info(self, domain, updated_challenge):
-        challenge_info = self.load_challenge_info(domain)
-        challenges = challenge_info.get('challenges', [])
-        if not challenges:
-            return
-        for challenge in challenges:
-            if challenge.get('type') == updated_challenge.get('type'):
-                if challenge.get('token') == updated_challenge.get('token'):
-                    challenge.update(updated_challenge)
-        self.dump_challenge_info(domain, challenge_info)
-
-    def challenge_info(self, domain):
-        challenge_info = self.load_challenge_info(domain)
-        if not challenge_info:
-            challenge_info = self.request(CA + "/acme/new-authz", self.dump(dict(
+    def new_authz_post(self, domain):
+        response = self.session.post(
+            self.uris['new-authz'],
+            json=self.dumps_signed(
                 resource="new-authz",
                 identifier=dict(
                     type="dns",
-                    value=domain))))
-        self.dump_challenge_info(domain, challenge_info)
+                    value=domain)))
+        data = response.json()
+        if response.status_code == 201:
+            return response.headers['Location'], data
+        fatal("Got error during new-authz: %s %s\n%s" % (
+            response.status_code, response.reason,
+            json.dumps(data, sort_keys=True, indent=4)))
+
+    def authz_get(self, uri):
+        response = self.session.get(uri)
+        data = response.json()
+        if response.status_code == 200:
+            return data
+        fatal('Got error reading authz info %s: %s %s\n%s' % (
+            uri, response.status_code, response.reason,
+            json.dumps(data, sort_keys=True, indent=4)))
+
+    def challenge_get(self, uri):
+        response = self.session.get(uri)
+        data = response.json()
+        if response.status_code == 202:
+            return data
+        fatal('Got error reading challenge info %s: %s %s\n%s' % (
+            uri, response.status_code, response.reason,
+            json.dumps(data, sort_keys=True, indent=4)))
+
+    def challenge_post(self, challenge, domain):
+        authorization = "{}.{}".format(challenge['token'], self.thumbprint)
+        if challenge['type'] == 'dns-01':
+            digest = hashlib.sha256(authorization.encode('ascii')).digest()
+            txt = b64(digest)
+            click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
+            self.tokens[dns.name.from_text(domain)] = txt
+        elif challenge['type'] == 'http-01':
+            self.tokens[challenge['token']] = authorization.encode('ascii')
+        response = self.session.post(
+            challenge['uri'],
+            json=self.dumps_signed(
+                resource="challenge",
+                type=challenge['type'],
+                keyAuthorization=authorization))
+        data = response.json()
+        if response.status_code == 202:
+            time.sleep(1)
+            return data
+        if challenge['type'] == 'dns-01':
+            del self.tokens[dns.name.from_text(domain)]
+        elif challenge['type'] == 'http-01':
+            del self.tokens[challenge['token']]
+        if response.status_code == 400 and 'Response does not complete challenge' in data['detail']:
+            click.echo(click.style(data['detail'], fg="yellow"))
+            return
+        elif response.status_code == 400 and 'Challenge data was corrupted' in data['detail']:
+            click.echo(click.style(data['detail'], fg="yellow"))
+            return
+        fatal('Got error during challenge on %s: %s %s\n%s' % (
+            challenge['uri'], response.status_code, response.reason,
+            json.dumps(data, sort_keys=True, indent=4)))
+
+    def authz_info_fn(self, domain):
+        return self.base.joinpath("%s.authz_info.json" % domain)
+
+    def load_authz_info(self, domain):
+        authz_info_fn = self.authz_info_fn(domain)
+        authz_info = {}
+        if self.current is True and authz_info_fn.exists():
+            click.echo(click.style(
+                "Using existing challenge info for '%s'." % domain, fg="green"))
+            with authz_info_fn.open() as f:
+                authz_info = json.load(f)
+        if 'authz-uri' not in authz_info:
+            authz_info = {}
+        if 'expires' in authz_info:
+            if is_expired(authz_info['expires']):
+                authz_info = {}
+        return authz_info
+
+    def dump_authz_info(self, domain, authz_info):
+        authz_info_fn = self.authz_info_fn(domain)
+        json_data = json.dumps(authz_info, sort_keys=True, indent=4)
+        with authz_info_fn.open('w') as f:
+            f.write(json_data)
+        return authz_info
+
+    def challenge_info(self, domain):
+        authz_info = self.load_authz_info(domain)
+        challenge_info = {}
+        if 'authz-uri' in authz_info:
+            challenge_info = self.authz_get(authz_info['authz-uri'])
+            if 'expires' in challenge_info:
+                if is_expired(challenge_info['expires']):
+                    challenge_info = {}
+            status = challenge_info.get('status', 'pending')
+            if status not in ('pending', 'valid'):
+                challenge_info = {}
+        if not challenge_info:
+            authz_uri, challenge_info = self.new_authz_post(domain)
+            authz_info['authz-uri'] = authz_uri
+            if 'expires' in challenge_info:
+                authz_info['expires'] = challenge_info['expires']
+            self.dump_authz_info(domain, authz_info)
         return challenge_info
 
     def wait_for_challenge_response(self, uri, timeout):
         while timeout:
-            res = self.session.get(uri)
-            try:
-                if 'Replay-Nonce' in res.headers:
-                    self.nonce = res.headers['Replay-Nonce']
-                resp = json.loads(res.text)
-                res.raise_for_status()
-            except:
-                fatal('Request to %s failed (%s): %s\n%s' % (uri, res.status_code, res.reason, res.text))
-            if resp['status'] == 'pending':
+            data = self.challenge_get(uri)
+            if data['status'] == 'pending':
                 click.echo('Waiting for response ...')
                 time.sleep(1)
                 timeout = timeout - 1
                 continue
-            elif resp['status'] == 'valid':
-                return resp
-            return resp
+            return data
 
-    def authz(self, domain, tokens):
-        challenge_info = self.challenge_info(domain)
-        resp = None
-        for challenge in challenge_info.get('challenges', []):
-            if challenge['type'] not in ('http-01',):
-                continue
+    def handle_challenge(self, uri, domain):
+        challenge = self.challenge_get(uri)
+        status = challenge.get('status', 'pending')
+        if status == 'pending':
             click.echo(click.style(
                 "Trying challenge type '%s'." % challenge['type'],
                 fg="green"))
-            authorization = "{}.{}".format(challenge['token'], self.thumbprint())
-            if challenge['type'] == 'dns-01':
-                digest = hashlib.sha256(authorization.encode('ascii')).digest()
-                txt = base64.b64encode(digest).decode('ascii')
-                click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
-            elif challenge['type'] == 'http-01':
-                tokens[challenge['token']] = authorization.encode('ascii')
-            try:
-                self.request(
-                    challenge['uri'],
-                    self.dump(dict(
-                        resource="challenge",
-                        keyAuthorization=authorization)),
-                    expect_error=True)
-                time.sleep(1)
-            except requests.exceptions.HTTPError as e:
-                res = e.response
-                info = res.json()
-                if info.get('status') == 400 and 'Response does not complete challenge' in info['detail']:
-                    click.echo(click.style(info['detail'], fg="yellow"))
-                    pass
-                elif info.get('status') == 400 and 'Challenge data was corrupted' in info['detail']:
-                    click.echo(click.style(info['detail'], fg="yellow"))
-                    continue
-                else:
-                    fatal('Request to %s failed (%s): %s\n%s' % (
-                        challenge['uri'], res.status_code, res.reason,
-                        json.dumps(info, sort_keys=True, indent=4)))
-            resp = self.wait_for_challenge_response(challenge['uri'], 15)
-            if resp['status'] == 'invalid':
-                click.echo(click.style("Challenge invalid.", fg="yellow"))
-                continue
-            elif resp['status'] == 'valid':
-                click.echo(click.style("Challenge valid.", fg="green"))
+            data = self.challenge_post(challenge, domain)
+            if data is None:
+                return False
+            challenge = self.wait_for_challenge_response(uri, 15)
+            if challenge is None:
+                return False
+        if challenge['status'] == 'invalid':
+            click.echo(click.style("Challenge invalid.", fg="yellow"))
+            if 'error' in challenge and 'detail' in challenge['error']:
+                click.echo(click.style(challenge['error']['detail'], fg='yellow'))
+            return False
+        elif challenge['status'] == 'valid':
+            click.echo(click.style("Challenge valid.", fg="green"))
+            return True
+        elif challenge['status'] == 'pending':
+            click.echo(click.style("Challenge pending."), fg="yellow")
+            if 'error' in challenge and 'detail' in challenge['error']:
+                click.echo(click.style(challenge['error']['detail'], fg='yellow'))
+            return False
+        elif challenge['status'] != 'valid':
+            fatal("Challenge for %s did not pass: %s" % (
+                domain, json.dumps(challenge, sort_keys=True, indent=4)))
+
+    def handle_authz(self, domain):
+        for challenge_type in self.challenges:
+            challenge_info = self.challenge_info(domain)
+            if challenge_info.get('status') == 'valid':
+                return challenge_info
+            challenge = [
+                x
+                for x in challenge_info['challenges']
+                if x['type'] == challenge_type][0]
+            if self.handle_challenge(challenge['uri'], domain):
                 break
-            elif resp['status'] == 'pending':
-                click.echo(click.style("Challenge timed out."), fg="yellow")
-                continue
-            elif resp['status'] != 'valid':
-                fatal("Challenge for %s did not pass: %s" % (
-                    domain, json.dumps(resp, sort_keys=True, indent=4)))
-        if resp is None or resp['status'] != 'valid':
-            if resp is not None and 'error' in resp and 'detail' in resp['error']:
-                click.echo(click.style(resp['error']['detail'], fg='red'))
-                return
-        self.update_challenge_info(domain, resp)
+        challenge_info = self.challenge_info(domain)
+        return challenge_info
 
-    def cert(self, der):
-        return self.request(CA + "/acme/new-cert", self.dump(dict(
-            resource="new-cert",
-            csr=b64(der))))
+    def new_cert_post(self, der):
+        response = self.session.post(
+            self.uris['new-cert'],
+            json=self.dumps_signed(
+                resource="new-cert",
+                csr=b64(der)))
+        content_type = response.headers.get('Content-Type')
+        if response.status_code == 201 and content_type == 'application/pkix-cert':
+            return response.content
+        if content_type in ('application/json', 'application/problem+json'):
+            data = response.json()
+            fatal("Got error during new-authz: %s %s\n%s" % (
+                response.status_code, response.reason,
+                json.dumps(data, sort_keys=True, indent=4)))
+        fatal("Got error during new-authz: %s %s" % (
+            response.status_code, response.reason))
 
 
-def gencrt(fn, der, user_key, user_pub, email, domains, current=False):
-    backend = default_backend()
+def genreg(fn, acme, email):
+    data = acme.new_reg_post(email)
+    data = json.dumps(data, sort_keys=True, indent=4)
+    with fn.open('w') as out:
+        out.write(data)
+
+
+def gencrt(fn, der, user_key, user_pub, email, domains, challenges, current=False):
     with user_key.open('rb') as f:
-        priv = serialization.load_pem_private_key(f.read(), None, backend)
-    with user_pub.open('rb') as f:
-        pub = serialization.load_pem_public_key(f.read(), backend)
+        priv = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, f.read())
+    jwk = get_jwk(user_pub)
     with der.open('rb') as f:
         der_data = f.read()
     base = der.parent
     address = ('localhost', 8080)
     server = http.server.HTTPServer(address, HTTPRequestHandler)
-    server.tokens = dict()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    click.echo("Starting server on %s:%s" % address)
+    click.echo("Starting http server on %s:%s" % address)
     thread.start()
-    acme = ACME(base, priv, pub, current=current)
-    click.echo("Registering at letsencrypt.")
-    acme.reg(email)
+    time.sleep(0.1)
+    dnsaddress = ('localhost', 8053)
+    dnsserver = DNSServer(dnsaddress)
+    dnsthread = threading.Thread(target=dnsserver, daemon=True)
+    click.echo("Starting dns server on %s:%s" % dnsaddress)
+    dnsthread.start()
+    time.sleep(0.1)
+    if not thread.is_alive() or not dnsthread.is_alive():
+        fatal("Failed to start servers.")
+    acme = ACME(CA, base, priv, jwk, challenges, current=current)
+    dnsserver.tokens = server.tokens = acme.tokens
+    acme.update_directory()
+    click.echo("Checking registration at letsencrypt.")
+    reg_fn = file_generator(user_pub.parent, 'registration')(
+        'registration info', '.json', genreg, acme, email)
+    with reg_fn.open() as f:
+        registration_info = json.load(f)
+    click.echo("Registered on %s via %s" % (
+        registration_info["createdAt"], registration_info["initialIp"]))
+    click.echo("Contact: %s" % ", ".join(registration_info["contact"]))
+    click.echo("Agreement: %s" % registration_info["agreement"])
     click.echo("Preparing challenges for %s." % ', '.join(domains))
+    if registration_info['key'] != jwk:
+        fatal("The public user key and the registration info don't match.")
     for domain in domains:
         click.echo("Authorizing %s." % domain)
-        acme.authz(domain, server.tokens)
+        info = acme.handle_authz(domain)
+        if info.get('status') != 'valid':
+            fatal("Couldn't finish authorization of '%s'." % domain)
+    cert = acme.new_cert_post(der_data)
     with tempfile.TemporaryFile() as f:
-        f.write(acme.cert(der_data))
+        f.write(cert)
         f.flush()
         f.seek(0)
         subprocess.check_call([
@@ -527,17 +674,13 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains, multi, regenerate):
+def generate(base, domains, challenges, regenerate):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
         'public user key', '.pub', genpub, user_key)
     domains = sorted(domains, key=len)
     main = domains[0]
-    if not multi:
-        for domain in domains[1:]:
-            if not domain.endswith("." + main):
-                fatal("Domain '%s' isn't a subdomain of '%s'.")
     key_base = base.joinpath(main)
     if not key_base.exists():
         key_base.mkdir()
@@ -550,7 +693,7 @@ def generate(base, domains, multi, regenerate):
     if not verify_csr(csr, domains):
         remove(key_base, '*.csr', '*.crt', '*.der')
     der = date_gen('der', '.der', gender, csr)
-    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, current=current)
+    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, current=current)
     if not verify_crt(crt, domains):
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
@@ -560,19 +703,24 @@ def generate(base, domains, multi, regenerate):
 
 
 @click.command()
-@click.option("-m/-w", "--multi/--with-www", default=False)
+@click.option(
+    "--dns/--no-dns", default=False,
+    help="Try DNS challenge if HTTP challenge fails")
 @click.option(
     "-r/-R", "--regenerate/--dont-regenerate", default=False,
     help="Force creating a new certificate even if one for the current day exists.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, multi, regenerate):
+def main(domains, dns, regenerate):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
     the same day."""
     base = Path.cwd()
+    challenges = ['http-01']
+    if dns:
+        challenges.append('dns-01')
     if domains:
-        generate(base, domains, multi, regenerate)
+        generate(base, domains, challenges, regenerate)
 
 
 if __name__ == '__main__':
