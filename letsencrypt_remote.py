@@ -303,7 +303,7 @@ class DNSServer:
 
 
 class ACME:
-    def __init__(self, ca, base, priv, jwk, current=False):
+    def __init__(self, ca, base, priv, jwk, challenges, current=False):
         self.ca = ca
         self.base = base
         self.priv = priv
@@ -315,6 +315,7 @@ class ACME:
             self.jwk,
             sort_keys=True,
             separators=(',', ':')).encode('ascii')).digest())
+        self.challenges = challenges
         self.current = current
         self.session = requests.Session()
         self.session.hooks = dict(response=self.response_hook)
@@ -537,7 +538,7 @@ class ACME:
                 domain, json.dumps(challenge, sort_keys=True, indent=4)))
 
     def handle_authz(self, domain):
-        for challenge_type in ('http-01', 'dns-01'):
+        for challenge_type in self.challenges:
             challenge_info = self.challenge_info(domain)
             if challenge_info.get('status') == 'valid':
                 return challenge_info
@@ -575,7 +576,7 @@ def genreg(fn, acme, email):
         out.write(data)
 
 
-def gencrt(fn, der, user_key, user_pub, email, domains, current=False):
+def gencrt(fn, der, user_key, user_pub, email, domains, challenges, current=False):
     with user_key.open('rb') as f:
         priv = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, f.read())
     jwk = get_jwk(user_pub)
@@ -596,7 +597,7 @@ def gencrt(fn, der, user_key, user_pub, email, domains, current=False):
     time.sleep(0.1)
     if not thread.is_alive() or not dnsthread.is_alive():
         fatal("Failed to start servers.")
-    acme = ACME(CA, base, priv, jwk, current=current)
+    acme = ACME(CA, base, priv, jwk, challenges, current=current)
     dnsserver.tokens = server.tokens = acme.tokens
     acme.update_directory()
     click.echo("Checking registration at letsencrypt.")
@@ -673,7 +674,7 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains, multi, regenerate):
+def generate(base, domains, challenges, multi, regenerate):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
@@ -696,7 +697,7 @@ def generate(base, domains, multi, regenerate):
     if not verify_csr(csr, domains):
         remove(key_base, '*.csr', '*.crt', '*.der')
     der = date_gen('der', '.der', gender, csr)
-    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, current=current)
+    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, current=current)
     if not verify_crt(crt, domains):
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
@@ -708,17 +709,23 @@ def generate(base, domains, multi, regenerate):
 @click.command()
 @click.option("-m/-w", "--multi/--with-www", default=False)
 @click.option(
+    "--dns/--no-dns", default=False,
+    help="Try DNS challenge if HTTP challenge fails")
+@click.option(
     "-r/-R", "--regenerate/--dont-regenerate", default=False,
     help="Force creating a new certificate even if one for the current day exists.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, multi, regenerate):
+def main(domains, dns, multi, regenerate):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
     the same day."""
     base = Path.cwd()
+    challenges = ['http-01']
+    if dns:
+        challenges.append('dns-01')
     if domains:
-        generate(base, domains, multi, regenerate)
+        generate(base, domains, challenges, multi, regenerate)
 
 
 if __name__ == '__main__':
