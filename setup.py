@@ -8,7 +8,7 @@ HISTORY = open(os.path.abspath('HISTORY.rst')).read()
 
 setup(
     name='letsencrypt-remote',
-    version='0.4.0',
+    version='0.4.1',
     long_description="\n\n".join([README, HISTORY]),
     classifiers=[
         "Development Status :: 4 - Beta",

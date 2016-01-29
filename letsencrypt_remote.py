@@ -698,8 +698,7 @@ def generate(base, domains, challenges, regenerate):
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
         base, LETSENCRYPT_CERT, date)('pem', '.pem', getpem)
-    file_generator(key_base, main)(
-        'chained crt', '-chained.crt', chain, crt, pem)
+    date_gen('chained crt', '-chained.crt', chain, crt, pem)
 
 
 @click.command()
