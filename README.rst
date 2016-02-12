@@ -24,6 +24,14 @@ Requirements
 You need an ``openssl`` executable in your path for key generation and signing.
 
 
+Testing with staging server
+---------------------------
+
+With the ``-s`` option you can use the staging server of `letsencrypt`_.
+This is advised, so you don't run into quota limits or similar until your setup works.
+The resulting certificate won't validate, but otherwise has the same content as a regular certificate.
+
+
 Basic usage
 -----------
 

@@ -22,8 +22,6 @@ import threading
 import time
 
 
-# CA = "https://acme-staging.api.letsencrypt.org"
-CA = "https://acme-v01.api.letsencrypt.org"
 CURL = 'curl'
 OPENSSL = 'openssl'
 OPENSSL_CONF = Path('/usr/local/etc/openssl/openssl.cnf')
@@ -482,7 +480,10 @@ class ACME:
         authz_info = self.load_authz_info(domain)
         challenge_info = {}
         if 'authz-uri' in authz_info:
-            challenge_info = self.authz_get(authz_info['authz-uri'])
+            if authz_info['authz-uri'].startswith(self.ca):
+                challenge_info = self.authz_get(authz_info['authz-uri'])
+            else:
+                challenge_info = {}
             if 'expires' in challenge_info:
                 if is_expired(challenge_info['expires']):
                     challenge_info = {}
@@ -576,7 +577,7 @@ def genreg(fn, acme, email):
         out.write(data)
 
 
-def gencrt(fn, der, user_key, user_pub, email, domains, challenges, current=False):
+def gencrt(fn, der, user_key, user_pub, email, domains, challenges, ca, current=False):
     with user_key.open('rb') as f:
         priv = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, f.read())
     jwk = get_jwk(user_pub)
@@ -597,7 +598,7 @@ def gencrt(fn, der, user_key, user_pub, email, domains, challenges, current=Fals
     time.sleep(0.1)
     if not thread.is_alive() or not dnsthread.is_alive():
         fatal("Failed to start servers.")
-    acme = ACME(CA, base, priv, jwk, challenges, current=current)
+    acme = ACME(ca, base, priv, jwk, challenges, current=current)
     dnsserver.tokens = server.tokens = acme.tokens
     acme.update_directory()
     click.echo("Checking registration at letsencrypt.")
@@ -674,7 +675,7 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains, challenges, regenerate):
+def generate(base, domains, challenges, regenerate, ca):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
@@ -693,7 +694,7 @@ def generate(base, domains, challenges, regenerate):
     if not verify_csr(csr, domains):
         remove(key_base, '*.csr', '*.crt', '*.der')
     der = date_gen('der', '.der', gender, csr)
-    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, current=current)
+    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, ca, current=current)
     if not verify_crt(crt, domains):
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
@@ -708,18 +709,25 @@ def generate(base, domains, challenges, regenerate):
 @click.option(
     "-r/-R", "--regenerate/--dont-regenerate", default=False,
     help="Force creating a new certificate even if one for the current day exists.")
+@click.option(
+    "-s/-p", "--staging/--production", default=False,
+    help="Use staging server of letsencrypt.org for testing.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, regenerate):
+def main(domains, dns, regenerate, staging):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
     the same day."""
+    if staging:
+        ca = "https://acme-staging.api.letsencrypt.org"
+    else:
+        ca = "https://acme-v01.api.letsencrypt.org"
     base = Path.cwd()
     challenges = ['http-01']
     if dns:
         challenges.append('dns-01')
     if domains:
-        generate(base, domains, challenges, regenerate)
+        generate(base, domains, challenges, regenerate, ca)
 
 
 if __name__ == '__main__':

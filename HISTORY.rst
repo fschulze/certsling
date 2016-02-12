@@ -1,6 +1,13 @@
 Changelog
 =========
 
+0.5.0 - 2016-02-12
+------------------
+
+* Allow selection of letsencrypt.org staging server with ``-s`` option.
+  [fschulze]
+
+
 0.4.1 - 2016-01-29
 ------------------
 
