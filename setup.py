@@ -10,6 +10,7 @@ setup(
     name='letsencrypt-remote',
     version='0.5.0',
     long_description="\n\n".join([README, HISTORY]),
+    url='https://github.com/fschulze/letsencrypt-remote',
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: System Administrators",
