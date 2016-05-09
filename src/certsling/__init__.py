@@ -700,13 +700,11 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains, challenges, regenerate, ca, update_registration):
+def generate(base, main, domains, challenges, regenerate, ca, update_registration):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
         'public user key', '.pub', genpub, user_key)
-    domains = sorted(domains, key=len)
-    main = domains[0]
     key_base = base.joinpath(main)
     if not key_base.exists():
         key_base.mkdir()
@@ -731,6 +729,10 @@ def generate(base, domains, challenges, regenerate, ca, update_registration):
     date_gen('chained crt', '-chained.crt', chain, crt, pem)
 
 
+def domain_key(x):
+    return (len(x), x)
+
+
 @click.command()
 @click.option(
     "--dns/--no-dns", default=False,
@@ -742,10 +744,13 @@ def generate(base, domains, challenges, regenerate, ca, update_registration):
     "-s/-p", "--staging/--production", default=False,
     help="Use staging server of letsencrypt.org for testing.")
 @click.option(
+    "-u", "--update", metavar="PATH",
+    help="Update the certificates in PATH.")
+@click.option(
     "--update-registration/--no-update-registration", default=False,
     help="Force an update of the registration, for example to agree to newer terms of service.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, regenerate, staging, update_registration):
+def main(domains, dns, regenerate, staging, update, update_registration):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
@@ -755,11 +760,64 @@ def main(domains, dns, regenerate, staging, update_registration):
     else:
         ca = "https://acme-v01.api.letsencrypt.org"
     base = Path.cwd()
-    challenges = ['http-01']
-    if dns:
+    cli_domains = sorted(domains, key=domain_key)
+    options = dict(
+        challenges=['http-01'])
+    if update:
+        path = Path(update).absolute()
+        if not path.exists():
+            fatal("The path %s doesn't exist." % update)
+        base = path.parent
+        options_path = path.joinpath('options.json')
+        if options_path.exists():
+            with options_path.open() as f:
+                options.update(json.load(f))
+        else:
+            options['domains'] = [path.name] + [
+                x.name.rsplit('.authz_info.json', 1)[0]
+                for x in path.glob('*.authz_info.json')]
+            options['main'] = path.name
+    challenges = options['challenges']
+    if dns and 'dns-01' not in challenges:
         challenges.append('dns-01')
+    if not dns and 'dns-01' in challenges:
+        challenges.remove('dns-01')
+    option_domains = tuple(
+        sorted(set(options.get('domains', [])), key=domain_key))
+    if option_domains:
+        click.echo(click.style(
+            "Existing domains from '%s': %s" % (
+                update, ", ".join(option_domains)),
+            fg="green"))
+        domains = tuple(set(domains).union(option_domains))
+    if cli_domains:
+        click.echo(click.style(
+            "Domains from command line: %s" % ", ".join(cli_domains),
+            fg="green"))
+        domains = tuple(set(domains).union(cli_domains))
+    domains = sorted(domains, key=domain_key)
+    main = options.get('main', domains[0] if domains else None)
     if domains:
-        generate(base, domains, challenges, regenerate, ca, update_registration)
+        click.echo(click.style(
+            "Domains to update: %s" % ", ".join(domains),
+            fg="green"))
+        click.echo(click.style(
+            "Main domain: %s" % main,
+            fg="green"))
+        click.echo(click.style(
+            "Challenges: %s" % ", ".join(challenges),
+            fg="green"))
+        if update:
+            if not yesno("Do you want to update with the above settings?"):
+                fatal('Aborted.')
+        generate(base, main, domains, challenges, regenerate, ca, update_registration)
+        with base.joinpath(main, 'options.json').open("w") as f:
+            f.write(json.dumps(
+                dict(
+                    challenges=challenges,
+                    main=main,
+                    domains=domains),
+                sort_keys=True, indent=4))
 
 
 if __name__ == '__main__':

@@ -4,6 +4,10 @@ Changelog
 0.8.0 - Unreleased
 ------------------
 
+* Add new ``--update`` (``-u``) option to avoid having to remember the settings
+  for each domain.
+  [fschulze]
+
 * Ask to repeat csr and crt generation on failure.
   [solidgoldbomb]
 
