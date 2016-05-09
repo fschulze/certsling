@@ -1,7 +1,7 @@
 Changelog
 =========
 
-0.6.0 - Unreleased
+0.6.0 - 2016-05-09
 ------------------
 
 * Upgrade to new X3 authority.
