@@ -1,6 +1,13 @@
 Changelog
 =========
 
+0.6.0 - Unreleased
+------------------
+
+* Upgrade to new X3 authority.
+  [fschulze]
+
+
 0.5.0 - 2016-02-12
 ------------------
 

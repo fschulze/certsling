@@ -8,7 +8,7 @@ HISTORY = open(os.path.abspath('HISTORY.rst')).read()
 
 setup(
     name='letsencrypt-remote',
-    version='0.5.0',
+    version='0.6.0',
     description='Opinionated letsencrypt acme client working via a ssh port forward.',
     long_description="\n\n".join([README, HISTORY]),
     url='https://github.com/fschulze/letsencrypt-remote',

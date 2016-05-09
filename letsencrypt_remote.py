@@ -26,7 +26,7 @@ CURL = 'curl'
 OPENSSL = 'openssl'
 OPENSSL_CONF = Path('/usr/local/etc/openssl/openssl.cnf')
 TERMS = "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf"
-LETSENCRYPT_CERT = 'lets-encrypt-x1-cross-signed'
+LETSENCRYPT_CERT = 'lets-encrypt-x3-cross-signed'
 
 
 def yesno(question, default=None, all=False):
@@ -636,7 +636,7 @@ def verify_crt(crt, domains):
         b'CN', b'unkown').decode('ascii')
     if issuer == 'happy hacker fake CA':
         click.echo(click.style("Certificate issued by staging CA!", fg="red"))
-    elif issuer == "Let's Encrypt Authority X1":
+    elif issuer == "Let's Encrypt Authority X3":
         click.echo(click.style("Certificate issued by: %s" % issuer, fg="green"))
     else:
         click.echo(click.style("Unknown CA: %s" % issuer, fg="red"))
