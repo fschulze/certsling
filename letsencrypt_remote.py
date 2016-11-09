@@ -72,6 +72,19 @@ def fatal(msg, code=3):
     sys.exit(code)
 
 
+def fatal_response(msg, response, code=3):
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    headers = '\n'.join(': '.join(x) for x in response.headers.items())
+    fatal("%s: %s %s\n%s\n%s" % (
+        msg,
+        response.status_code, response.reason,
+        json.dumps(data, sort_keys=True, indent=4),
+        headers))
+
+
 def get_openssl_conf():
     output = subprocess.check_output([
         OPENSSL, 'version', '-a'])
@@ -340,9 +353,8 @@ class ACME:
         res = self.session.get(self.ca + '/directory')
         content_type = res.headers.get('Content-Type')
         if res.status_code != 200 or content_type != 'application/json':
-            fatal(
-                "Couldn't get directory from CA server '%s': %s %s" % (
-                    self.ca, res.status_code, res.reason))
+            fatal_response(
+                "Couldn't get directory from CA server '%s'" % self.ca, res)
         self.uris.update(res.json())
 
     def protected(self):
@@ -369,9 +381,7 @@ class ACME:
         if response.status_code == 202:
             return data
         else:
-            fatal("Got error while updating registration: %s %s\n%s" % (
-                response.status_code, response.reason,
-                json.dumps(data, sort_keys=True, indent=4)))
+            fatal_response("Got error while updating registration", response)
 
     def new_reg_post(self, email):
         response = self.session.post(
@@ -385,21 +395,13 @@ class ACME:
         elif response.status_code == 409:
             error = response.json()
             if error.get('detail') != 'Registration key is already in use':
-                fatal("Got error during registration: %s %s\n%s" % (
-                    response.status_code, response.reason,
-                    json.dumps(error, sort_keys=True, indent=4)))
+                fatal_response("Got error during registration", response)
             click.echo(click.style("Already registered.", fg='green'))
             uri = response.headers.get('Location', '')
             click.echo("Registration URI: %s" % uri)
             info = self.reg_post(uri, resource="reg")
         else:
-            try:
-                data = response.json()
-            except ValueError:
-                data = {}
-            fatal("Got unknown status during registration: %s %s" % (
-                response.status_code, response.reason,
-                json.dumps(data, sort_keys=True, indent=4)))
+            fatal_response("Got unknown status during registration", response)
         return info
 
     def new_authz_post(self, domain):
@@ -413,27 +415,21 @@ class ACME:
         data = response.json()
         if response.status_code == 201:
             return response.headers['Location'], data
-        fatal("Got error during new-authz: %s %s\n%s" % (
-            response.status_code, response.reason,
-            json.dumps(data, sort_keys=True, indent=4)))
+        fatal_response("Got error during new-authz", response)
 
     def authz_get(self, uri):
         response = self.session.get(uri)
         data = response.json()
         if response.status_code == 200:
             return data
-        fatal('Got error reading authz info %s: %s %s\n%s' % (
-            uri, response.status_code, response.reason,
-            json.dumps(data, sort_keys=True, indent=4)))
+        fatal_response('Got error reading authz info %s' % uri, response)
 
     def challenge_get(self, uri):
         response = self.session.get(uri)
         data = response.json()
         if response.status_code == 202:
             return data
-        fatal('Got error reading challenge info %s: %s %s\n%s' % (
-            uri, response.status_code, response.reason,
-            json.dumps(data, sort_keys=True, indent=4)))
+        fatal_response('Got error reading challenge info %s' % uri, response)
 
     def challenge_post(self, challenge, domain):
         authorization = "{}.{}".format(challenge['token'], self.thumbprint)
@@ -464,9 +460,8 @@ class ACME:
         elif response.status_code == 400 and 'Challenge data was corrupted' in data['detail']:
             click.echo(click.style(data['detail'], fg="yellow"))
             return
-        fatal('Got error during challenge on %s: %s %s\n%s' % (
-            challenge['uri'], response.status_code, response.reason,
-            json.dumps(data, sort_keys=True, indent=4)))
+        fatal_response(
+            'Got error during challenge on %s' % challenge['uri'], response)
 
     def authz_info_fn(self, domain):
         return self.base.joinpath("%s.authz_info.json" % domain)
@@ -578,13 +573,7 @@ class ACME:
         content_type = response.headers.get('Content-Type')
         if response.status_code == 201 and content_type == 'application/pkix-cert':
             return response.content
-        if content_type in ('application/json', 'application/problem+json'):
-            data = response.json()
-            fatal("Got error during new-authz: %s %s\n%s" % (
-                response.status_code, response.reason,
-                json.dumps(data, sort_keys=True, indent=4)))
-        fatal("Got error during new-authz: %s %s" % (
-            response.status_code, response.reason))
+        fatal_response("Got error during new-authz", response)
 
 
 def genreg(fn, acme, email):
