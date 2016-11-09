@@ -393,8 +393,13 @@ class ACME:
             click.echo("Registration URI: %s" % uri)
             info = self.reg_post(uri, resource="reg")
         else:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
             fatal("Got unknown status during registration: %s %s" % (
-                response.status_code, response.reason))
+                response.status_code, response.reason,
+                json.dumps(data, sort_keys=True, indent=4)))
         return info
 
     def new_authz_post(self, domain):
