@@ -1,6 +1,16 @@
 Changelog
 =========
 
+0.7.0 - Unreleased
+------------------
+
+* More detailed error reporting.
+  [fschulze]
+
+* Ask to agree to terms of use of letsencrypt and allow updating the registration.
+  [fschulze]
+
+
 0.6.0 - 2016-05-09
 ------------------
 
