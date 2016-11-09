@@ -107,11 +107,11 @@ def ensure_not_empty(fn):
     return False
 
 
-def file_generator(base, name):
+def file_generator(base, name, update=False):
     def generator(description, ext, generate, *args, **kw):
         fn = base.joinpath("%s%s" % (name, ext))
         rel = fn.relative_to(Path.cwd())
-        if ensure_not_empty(fn):
+        if not update and ensure_not_empty(fn):
             click.echo(click.style(
                 "Using existing %s '%s'." % (description, rel), fg='green'))
             return fn
@@ -377,21 +377,36 @@ class ACME:
 
     def reg_post(self, uri, **kw):
         response = self.session.post(uri, json=self.dumps_signed(**kw))
-        data = response.json()
-        if response.status_code == 202:
-            return data
-        else:
+        terms_uri = TERMS
+        if 'terms-of-service' in response.links:
+            terms_uri = response.links['terms-of-service']['url']
+        if response.status_code != 202:
             fatal_response("Got error while updating registration", response)
+        data = response.json()
+        agreement = data.get('agreement')
+        if agreement == terms_uri:
+            return data
+        click.echo("You have previously agreed the following terms:\n%s" % agreement)
+        if yesno("Do you now want to agree to the following terms?\n%s" % terms_uri):
+            response = self.session.post(
+                uri, json=self.dumps_signed(agreement=terms_uri, **kw))
+            if response.status_code != 202:
+                fatal_response("Got error while updating registration", response)
+            data = response.json()
+        return data
 
     def new_reg_post(self, email):
         response = self.session.post(
             self.uris['new-reg'],
             json=self.dumps_signed(
                 resource="new-reg",
-                contact=["mailto:" + email],
-                agreement=TERMS))
+                contact=["mailto:" + email]))
         if response.status_code == 200:
             info = response.json()
+        elif response.status_code == 201:
+            uri = response.headers.get('Location', '')
+            click.echo("Registration URI: %s" % uri)
+            info = self.reg_post(uri, resource="reg")
         elif response.status_code == 409:
             error = response.json()
             if error.get('detail') != 'Registration key is already in use':
@@ -583,7 +598,7 @@ def genreg(fn, acme, email):
         out.write(data)
 
 
-def gencrt(fn, der, user_key, user_pub, email, domains, challenges, ca, current=False):
+def gencrt(fn, der, user_key, user_pub, email, domains, challenges, ca, update_registration, current=False):
     with user_key.open('rb') as f:
         priv = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, f.read())
     jwk = get_jwk(user_pub)
@@ -608,14 +623,15 @@ def gencrt(fn, der, user_key, user_pub, email, domains, challenges, ca, current=
     dnsserver.tokens = server.tokens = acme.tokens
     acme.update_directory()
     click.echo("Checking registration at letsencrypt.")
-    reg_fn = file_generator(user_pub.parent, 'registration')(
+    reg_fn = file_generator(user_pub.parent, 'registration', update=update_registration)(
         'registration info', '.json', genreg, acme, email)
     with reg_fn.open() as f:
         registration_info = json.load(f)
     click.echo("Registered on %s via %s" % (
         registration_info["createdAt"], registration_info["initialIp"]))
     click.echo("Contact: %s" % ", ".join(registration_info["contact"]))
-    click.echo("Agreement: %s" % registration_info["agreement"])
+    if 'agreement' in registration_info:
+        click.echo("Agreement: %s" % registration_info["agreement"])
     click.echo("Preparing challenges for %s." % ', '.join(domains))
     if registration_info['key'] != jwk:
         fatal("The public user key and the registration info don't match.")
@@ -681,7 +697,7 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, domains, challenges, regenerate, ca):
+def generate(base, domains, challenges, regenerate, ca, update_registration):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
@@ -700,7 +716,7 @@ def generate(base, domains, challenges, regenerate, ca):
     if not verify_csr(csr, domains):
         remove(key_base, '*.csr', '*.crt', '*.der')
     der = date_gen('der', '.der', gender, csr)
-    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, ca, current=current)
+    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, ca, update_registration, current=current)
     if not verify_crt(crt, domains):
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
@@ -718,8 +734,11 @@ def generate(base, domains, challenges, regenerate, ca):
 @click.option(
     "-s/-p", "--staging/--production", default=False,
     help="Use staging server of letsencrypt.org for testing.")
+@click.option(
+    "--update-registration/--no-update-registration", default=False,
+    help="Force an update of the registration, for example to agree to newer terms of service.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, regenerate, staging):
+def main(domains, dns, regenerate, staging, update_registration):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
@@ -733,7 +752,7 @@ def main(domains, dns, regenerate, staging):
     if dns:
         challenges.append('dns-01')
     if domains:
-        generate(base, domains, challenges, regenerate, ca)
+        generate(base, domains, challenges, regenerate, ca, update_registration)
 
 
 if __name__ == '__main__':
