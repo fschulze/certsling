@@ -72,6 +72,18 @@ def fatal(msg, code=3):
     sys.exit(code)
 
 
+def get_openssl_conf():
+    output = subprocess.check_output([
+        OPENSSL, 'version', '-a'])
+    ssldir = [x for x in output.splitlines() if x.startswith(b'OPENSSLDIR:')]
+    if ssldir:
+        ssldir = Path(ssldir[0].decode('utf-8').split(':', 1)[1].strip().strip('"'))
+        sslconf = ssldir.joinpath('openssl.cnf')
+        if sslconf.exists():
+            return sslconf
+    return OPENSSL_CONF
+
+
 def ensure_not_empty(fn):
     if fn.exists():
         with fn.open('rb') as f:
@@ -141,7 +153,7 @@ def gencsr(fn, key, domains):
     if len(domains) > 1:
         config_fn = fn.parent.joinpath('openssl.cnf')
         with config_fn.open('wb') as config:
-            with OPENSSL_CONF.open('rb') as f:
+            with get_openssl_conf().open('rb') as f:
                 data = f.read()
                 config.write(data)
                 if not data.endswith(b'\n'):
