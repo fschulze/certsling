@@ -1,6 +1,8 @@
+/.cache/
 /.tox/
 /bin/
+/dist/
 /default.sublime-*
 /include/
-/letsencrypt-nosudo/
 /lib/
+/pip-selfcheck.json
