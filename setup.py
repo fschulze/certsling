@@ -22,7 +22,7 @@ setup(
         "Programming Language :: Python :: 3.6"],
     install_requires=[
         'click',
-        'dnspython3',
+        'dnspython>=1.15.0',
         'pyOpenSSL',
         'requests'],
     entry_points={

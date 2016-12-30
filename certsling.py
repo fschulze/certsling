@@ -306,7 +306,7 @@ class DNSServer:
                 question.name,
                 0,
                 dns.rdtypes.ANY.TXT.TXT(
-                    question.rdclass, question.rdtype, txt)))
+                    question.rdclass, question.rdtype, [txt.encode('ascii')])))
         return response.to_wire()
 
     def __call__(self):

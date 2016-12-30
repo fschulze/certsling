@@ -4,6 +4,8 @@ Changelog
 0.8.0 - Unreleased
 ------------------
 
+* Switch to dnspython after it merged with dnspython3.
+  [fschulze]
 
 
 0.7.0 - 2016-12-30
