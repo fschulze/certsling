@@ -655,7 +655,7 @@ def verify_crt(crt, domains):
         cert = OpenSSL.crypto.load_certificate(
             OpenSSL.crypto.FILETYPE_PEM, f.read())
     issuer = dict(cert.get_issuer().get_components()).get(
-        b'CN', b'unkown').decode('ascii')
+        b'CN', b'unknown').decode('ascii')
     if issuer == 'happy hacker fake CA':
         click.echo(click.style("Certificate issued by staging CA!", fg="red"))
     elif issuer == "Let's Encrypt Authority X3":
