@@ -27,4 +27,5 @@ setup(
         'requests'],
     entry_points={
         'console_scripts': ['certsling = certsling:main']},
-    py_modules=['certsling'])
+    packages=['certsling'],
+    package_dir={'': 'src'})

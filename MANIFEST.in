@@ -1,1 +1,2 @@
 include *.ini *.rst
+include src/certsling/tests/*.py

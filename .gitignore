@@ -1,6 +1,8 @@
 /.cache/
+/.coverage
 /.tox/
 /bin/
+/cov-*/
 /dist/
 /default.sublime-*
 /include/
