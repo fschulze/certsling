@@ -1,8 +1,11 @@
 Changelog
 =========
 
-0.7.0 - Unreleased
+0.7.0 - 2016-12-30
 ------------------
+
+* Renamed to ``certsling``.
+  [fschulze]
 
 * Use symmetric difference in ``verify_domains``. This catches problems due to
   typos in domain names and some other cases.

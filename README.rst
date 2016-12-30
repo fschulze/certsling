@@ -1,8 +1,13 @@
 letsencrypt-remote
 ==================
 
+.. warning::
+    letsencrypt-remote has been renamed to `certsling`_.
+    Install that package for further updates.
+
 An opinionated script to sign tls keys via `letsencrypt`_ on your local computer by forwarding the HTTP challenge via ssh.
 
+.. _certsling: https://pypi.python.org/pypi/certsling
 .. _letsencrypt: https://letsencrypt.org
 
 
