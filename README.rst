@@ -1,9 +1,5 @@
-letsencrypt-remote
-==================
-
-.. warning::
-    letsencrypt-remote has been renamed to `certsling`_.
-    Install that package for further updates.
+certsling
+=========
 
 An opinionated script to sign tls keys via `letsencrypt`_ on your local computer by forwarding the HTTP challenge via ssh.
 
@@ -16,7 +12,7 @@ Installation
 
 Best installed via `pipsi`_::
 
-    % pipsi install letsencrypt-remote
+    % pipsi install certsling
 
 Or some other way to install a python package with included scripts.
 
@@ -56,10 +52,10 @@ An example for nginx::
             proxy_pass http://localhost:8080;
         }
 
-From the directory you created earlier, invoke the ``letsencrypt-remote`` script with for example::
+From the directory you created earlier, invoke the ``certsling`` script with for example::
 
     % cd webmaster@example.com
-    % letsencrypt-remote example.com www.example.com
+    % certsling example.com www.example.com
 
 On first run, you are asked whether to create a ``user.key`` for authorization with letsencrypt.
 
@@ -96,8 +92,8 @@ Then in that ssh session, run the following to forward UDP port ``53`` to TCP on
 
     # socat -T15 udp4-recvfrom:53,reuseaddr,fork tcp:localhost:8053
 
-For ``letsencrypt-remote`` you need to add the `--dns`` option::
+For ``certsling`` you need to add the `--dns`` option::
 
-    % letsencrypt-remote --dns example.com www.example.com
+    % certsling --dns example.com www.example.com
 
 It will then first try the HTTP challenge and if that fails it will try the DNS challenge.

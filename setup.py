@@ -7,7 +7,7 @@ HISTORY = open(os.path.abspath('HISTORY.rst')).read()
 
 
 setup(
-    name='letsencrypt-remote',
+    name='certsling',
     version='0.7.0',
     description='Opinionated letsencrypt acme client working via a ssh port forward.',
     long_description="\n\n".join([README, HISTORY]),
@@ -24,5 +24,5 @@ setup(
         'pyOpenSSL',
         'requests'],
     entry_points={
-        'console_scripts': ['letsencrypt-remote = letsencrypt_remote:main']},
-    py_modules=['letsencrypt_remote'])
+        'console_scripts': ['certsling = certsling:main']},
+    py_modules=['certsling'])

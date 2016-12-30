@@ -747,10 +747,6 @@ def main(domains, dns, regenerate, staging, update_registration):
 
     By default a new certificate is generated, except when running again on
     the same day."""
-    click.echo(click.style(
-        "letsencrypt-remote has been renamed to certsling.\n"
-        "For further updates you have to install certsling instead of letsencrypt-remote.",
-        fg='red'))
     if staging:
         ca = "https://acme-staging.api.letsencrypt.org"
     else:
