@@ -716,12 +716,16 @@ def generate(base, domains, challenges, regenerate, ca, update_registration):
         'key', '.key', genkey)
     current = 'force' if regenerate else True
     date_gen = dated_file_generator(key_base, main, date, current=current)
-    csr = date_gen('csr', '.csr', gencsr, key, domains)
-    if not verify_csr(csr, domains):
+    while True:
+        csr = date_gen('csr', '.csr', gencsr, key, domains)
+        if verify_csr(csr, domains):
+            break
         remove(key_base, '*.csr', '*.crt', '*.der')
-    der = date_gen('der', '.der', gender, csr)
-    crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, ca, update_registration, current=current)
-    if not verify_crt(crt, domains):
+    while True:
+        der = date_gen('der', '.der', gender, csr)
+        crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, ca, update_registration, current=current)
+        if verify_crt(crt, domains):
+            break
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
         base, LETSENCRYPT_CERT, date)('pem', '.pem', getpem)
