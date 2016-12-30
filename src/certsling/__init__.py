@@ -109,7 +109,7 @@ def ensure_not_empty(fn):
 def file_generator(base, name, update=False):
     def generator(description, ext, generate, *args, **kw):
         fn = base.joinpath("%s%s" % (name, ext))
-        rel = fn.relative_to(Path.cwd())
+        rel = fn.relative_to(base)
         if not update and ensure_not_empty(fn):
             click.echo(click.style(
                 "Using existing %s '%s'." % (description, rel), fg='green'))
@@ -123,9 +123,9 @@ def file_generator(base, name, update=False):
 def dated_file_generator(base, name, date, current=False):
     def generator(description, ext, generate, *args, **kw):
         fn = base.joinpath("%s%s" % (name, ext))
-        rel = fn.relative_to(Path.cwd())
+        rel = fn.relative_to(base)
         fn_date = base.joinpath("%s-%s%s" % (name, date, ext))
-        rel_date = fn_date.relative_to(Path.cwd())
+        rel_date = fn_date.relative_to(base)
         if current == 'force' and fn.exists():
             click.echo("Unlinking existing %s '%s'." % (description, rel))
             fn.unlink()
@@ -147,13 +147,13 @@ def dated_file_generator(base, name, date, current=False):
     return generator
 
 
-def genkey(fn, ask=False):
+def genkey(fn, ask=False, keylen=4096):
     if ask:
-        click.echo('There is no user key in the current directory %s.' % Path.cwd())
+        click.echo('There is no user key in the current directory %s.' % fn.parent)
         if not yesno('Do you want to create a user key?', False):
             fatal('No user key created')
     subprocess.check_call([
-        OPENSSL, 'genrsa', '-out', str(fn), '4096'])
+        OPENSSL, 'genrsa', '-out', str(fn), str(keylen)])
 
 
 def genpub(fn, key):
@@ -689,7 +689,7 @@ def remove(base, *patterns):
     for pattern in patterns:
         for fn in base.glob(pattern):
             files.append(fn)
-            click.echo(fn.relative_to(Path.cwd()))
+            click.echo(fn.relative_to(base))
     if not yesno("Do you want to remove the above invalid files for a clean retry?"):
         fatal('Aborted.')
     for fn in files:
