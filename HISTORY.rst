@@ -4,6 +4,13 @@ Changelog
 0.7.0 - Unreleased
 ------------------
 
+* Use symmetric difference in ``verify_domains``. This catches problems due to
+  typos in domain names and some other cases.
+  [solidgoldbomb]
+
+* Update list of issuer names checked in ``verify_crt``.
+  [solidgoldbomb (Stacey Sheldon)]
+
 * More detailed error reporting.
   [fschulze]
 
