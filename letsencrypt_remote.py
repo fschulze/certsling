@@ -659,7 +659,10 @@ def verify_crt(crt, domains):
     if issuer in ["happy hacker fake CA",
                   "Fake LE Intermediate X1"]:
         click.echo(click.style("Certificate issued by staging CA!", fg="red"))
-    elif issuer == "Let's Encrypt Authority X3":
+    elif issuer in ["Let's Encrypt Authority X1",
+                    "Let's Encrypt Authority X2",
+                    "Let's Encrypt Authority X3",
+                    "Let's Encrypt Authority X4"]:
         click.echo(click.style("Certificate issued by: %s" % issuer, fg="green"))
     else:
         click.echo(click.style("Unknown CA: %s" % issuer, fg="red"))
