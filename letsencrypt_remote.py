@@ -204,7 +204,7 @@ def verify_domains(cert_or_req, domains):
             x.strip().replace('DNS:', '')
             for x in str(ext).split(',')]
         names = names.union(alt_names)
-    unmatched = set(domains).difference(names)
+    unmatched = set(domains).symmetric_difference(names)
     if unmatched:
         click.echo(click.style(
             "Unmatched alternate names %s" % ', '.join(unmatched), fg="red"))
