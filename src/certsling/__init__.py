@@ -17,7 +17,6 @@ import requests
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 
@@ -641,13 +640,10 @@ def gencrt(fn, der, user_key, user_pub, email, domains, challenges, ca, update_r
         if info.get('status') != 'valid':
             fatal("Couldn't finish authorization of '%s'." % domain)
     cert = acme.new_cert_post(der_data)
-    with tempfile.TemporaryFile() as f:
-        f.write(cert)
-        f.flush()
-        f.seek(0)
-        subprocess.check_call([
-            OPENSSL, 'x509', '-inform', 'DER', '-outform', 'PEM', '-out', str(fn)],
-            stdin=f)
+    with fn.open('wb') as out:
+        out.write(b'-----BEGIN CERTIFICATE-----\n')
+        out.write(base64.encodestring(cert))
+        out.write(b'-----END CERTIFICATE-----\n')
 
 
 def verify_crt(crt, domains):
