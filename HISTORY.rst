@@ -4,6 +4,9 @@ Changelog
 0.8.0 - Unreleased
 ------------------
 
+* Ask to repeat csr and crt generation on failure.
+  [solidgoldbomb]
+
 * Switch to dnspython after it merged with dnspython3.
   [fschulze]
 
