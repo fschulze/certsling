@@ -161,6 +161,10 @@ def genpub(fn, key):
         OPENSSL, 'rsa', '-in', str(key), '-pubout', '-out', str(fn)])
 
 
+def createSubjectAltName(domains):
+    return 'subjectAltName = %s' % ','.join('DNS:%s' % x for x in domains)
+
+
 def gencsr(fn, key, domains):
     if len(domains) > 1:
         config_fn = fn.parent.joinpath('openssl.cnf')
@@ -170,8 +174,7 @@ def gencsr(fn, key, domains):
                 config.write(data)
                 if not data.endswith(b'\n'):
                     config.write(b'\n')
-            dns = ','.join('DNS:%s' % x for x in domains)
-            lines = ['', '[SAN]', 'subjectAltName = %s' % dns, '']
+            lines = ['', '[SAN]', createSubjectAltName(domains), '']
             config.write(bytes('\n'.join(lines).encode('ascii')))
         subprocess.check_call([
             OPENSSL, 'req', '-sha256', '-new',
