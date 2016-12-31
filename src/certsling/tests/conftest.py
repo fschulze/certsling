@@ -93,7 +93,9 @@ def ca(server):
 def genkey(monkeypatch):
     from certsling import genkey
     from functools import partial
-    monkeypatch.setattr("certsling.genkey", partial(genkey, keylen=512))
+    genkey_partial = partial(genkey, keylen=512)
+    monkeypatch.setattr("certsling.genkey", genkey_partial)
+    return genkey_partial
 
 
 @pytest.fixture
