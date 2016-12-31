@@ -84,7 +84,7 @@ def signer(base, ca_key, ca_crt):
         ['example.com', 'foo.example.com'],
         False, False)])
 def test_verify(base, crt_result, csr_domains, csr_result, gencsr, signer, verify_domains):
-    from certsling import OPENSSL, verify_crt, verify_csr
+    from certsling import verify_crt, verify_csr
     csr_fn = base.joinpath('domain.csr')
     gencsr(csr_fn, domains=csr_domains)
     csr_content = csr_fn.open('r').read().splitlines()
