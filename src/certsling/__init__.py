@@ -62,9 +62,9 @@ def yesno(question, default=None, all=False):
             if answer in answers[option]:
                 return option
         if all:
-            print("You have to answer with y, yes, n, no, a or all.", file=sys.stderr)
+            click.echo("You have to answer with y, yes, n, no, a or all.")
         else:
-            print("You have to answer with y, yes, n or no.", file=sys.stderr)
+            click.echo("You have to answer with y, yes, n or no.")
 
 
 def fatal(msg, code=3):
