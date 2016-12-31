@@ -5,4 +5,4 @@ python:
   - "3.6"
 sudo: false
 install: pip install tox
-script: tox -e ${TRAVIS_PYTHON_VERSION/./}
+script: tox -e py${TRAVIS_PYTHON_VERSION/./}
