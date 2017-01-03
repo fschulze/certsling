@@ -10,9 +10,6 @@ An opinionated script to sign tls keys via `letsencrypt`_ on your local computer
 Installation
 ------------
 
-It's recommended to use Python 3.5 or newer on macOS,
-because DNS lookups work in parallel and thus much faster when checking several domains.
-
 Best installed via `pipsi`_::
 
     % pipsi install certsling
