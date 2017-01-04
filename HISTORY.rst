@@ -1,7 +1,7 @@
 Changelog
 =========
 
-0.8.0 - Unreleased
+0.8.0 - 2017-01-04
 ------------------
 
 * Add new ``--update`` (``-u``) option to avoid having to remember the settings

@@ -1,7 +1,7 @@
 certsling
 =========
 
-An opinionated script to sign tls keys via `letsencrypt`_ on your local computer by forwarding the HTTP challenge via ssh.
+An opinionated script to sign tls keys via `letsencrypt`_ on your local computer by forwarding the HTTP/DNS challenge via ssh.
 
 .. _certsling: https://pypi.python.org/pypi/certsling
 .. _letsencrypt: https://letsencrypt.org
