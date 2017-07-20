@@ -1,6 +1,6 @@
 FROM python:3-alpine
 
-RUN apk add --no-cache openssl libffi
+RUN apk add --no-cache openssl libffi curl
 
 RUN apk add --no-cache openssl-dev musl-dev libffi-dev gcc \
     && pip install certsling \
