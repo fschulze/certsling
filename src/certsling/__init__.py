@@ -1,5 +1,6 @@
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
+from functools import partial
 from pathlib import Path
 import OpenSSL
 import base64
@@ -328,7 +329,7 @@ class DNSServer:
 
 
 class ACME:
-    def __init__(self, ca, base, priv, jwk, challenges, current=False):
+    def __init__(self, ca, base, priv, jwk, challenges, tokens, current=False, update_registration=False):
         self.ca = ca
         self.base = base
         self.priv = priv
@@ -342,10 +343,11 @@ class ACME:
             separators=(',', ':')).encode('ascii')).digest())
         self.challenges = challenges
         self.current = current
+        self.update_registration = update_registration
         self.session = requests.Session()
         self.session.hooks = dict(response=self.response_hook)
         self.uris = {}
-        self.tokens = {}
+        self.tokens = tokens
 
     def response_hook(self, response, *args, **kwargs):
         if 'Replay-Nonce' in response.headers:
@@ -420,6 +422,21 @@ class ACME:
         else:
             fatal_response("Got unknown status during registration", response)
         return info
+
+    def check_registration(self):
+        click.echo("Checking registration at letsencrypt.")
+        reg_fn = file_generator(
+            self.base, 'registration', update=self.update_registration)(
+            'registration info', '.json', genreg, self, self.base.name)
+        with reg_fn.open() as f:
+            registration_info = json.load(f)
+        click.echo("Registered on %s via %s" % (
+            registration_info["createdAt"], registration_info["initialIp"]))
+        click.echo("Contact: %s" % ", ".join(registration_info["contact"]))
+        if 'agreement' in registration_info:
+            click.echo("Agreement: %s" % registration_info["agreement"])
+        if registration_info['key'] != self.jwk:
+            fatal("The public user key and the registration info don't match.")
 
     def new_authz_post(self, domain):
         response = self.session.post(
@@ -600,43 +617,13 @@ def genreg(fn, acme, email):
         out.write(data)
 
 
-def gencrt(fn, der, user_key, user_pub, email, domains, challenges, ca, update_registration, current=False):
-    with user_key.open('rb') as f:
-        priv = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, f.read())
-    jwk = get_jwk(user_pub)
+def gencrt(fn, acme_factory, der, user_pub, email, domains):
     with der.open('rb') as f:
         der_data = f.read()
-    base = der.parent
-    address = ('localhost', 8080)
-    server = http.server.HTTPServer(address, HTTPRequestHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    click.echo("Starting http server on %s:%s" % address)
-    thread.start()
-    time.sleep(0.1)
-    dnsaddress = ('localhost', 8053)
-    dnsserver = DNSServer(dnsaddress)
-    dnsthread = threading.Thread(target=dnsserver, daemon=True)
-    click.echo("Starting dns server on %s:%s" % dnsaddress)
-    dnsthread.start()
-    time.sleep(0.1)
-    if not thread.is_alive() or not dnsthread.is_alive():
-        fatal("Failed to start servers.")
-    acme = ACME(ca, base, priv, jwk, challenges, current=current)
-    dnsserver.tokens = server.tokens = acme.tokens
+    acme = acme_factory()
     acme.update_directory()
-    click.echo("Checking registration at letsencrypt.")
-    reg_fn = file_generator(user_pub.parent, 'registration', update=update_registration)(
-        'registration info', '.json', genreg, acme, email)
-    with reg_fn.open() as f:
-        registration_info = json.load(f)
-    click.echo("Registered on %s via %s" % (
-        registration_info["createdAt"], registration_info["initialIp"]))
-    click.echo("Contact: %s" % ", ".join(registration_info["contact"]))
-    if 'agreement' in registration_info:
-        click.echo("Agreement: %s" % registration_info["agreement"])
+    acme.check_registration()
     click.echo("Preparing challenges for %s." % ', '.join(domains))
-    if registration_info['key'] != jwk:
-        fatal("The public user key and the registration info don't match.")
     for domain in domains:
         click.echo("Authorizing %s." % domain)
         info = acme.handle_authz(domain)
@@ -700,11 +687,12 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, main, domains, challenges, regenerate, ca, update_registration):
+def generate(base, main, acme_factory, domains, regenerate):
     user_key = file_generator(base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_generator(base, 'user')(
         'public user key', '.pub', genpub, user_key)
+    assert user_pub.parent == base
     key_base = base.joinpath(main)
     if not key_base.exists():
         key_base.mkdir()
@@ -718,15 +706,39 @@ def generate(base, main, domains, challenges, regenerate, ca, update_registratio
         if verify_csr(csr, domains):
             break
         remove(key_base, '*.csr', '*.crt', '*.der')
+    with user_key.open('rb') as f:
+        priv = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, f.read())
+    jwk = get_jwk(user_pub)
     while True:
         der = date_gen('der', '.der', gender, csr)
-        crt = date_gen('crt', '.crt', gencrt, der, user_key, user_pub, base.name, domains, challenges, ca, update_registration, current=current)
+        assert der.parent == key_base
+        acme_factory = partial(
+            acme_factory, base=key_base, priv=priv, jwk=jwk, current=current)
+        crt = date_gen('crt', '.crt', gencrt, acme_factory, der, user_pub, base.name, domains)
         if verify_crt(crt, domains):
             break
         remove(key_base, '*.crt', '*.der')
     pem = dated_file_generator(
         base, LETSENCRYPT_CERT, date)('pem', '.pem', getpem)
     date_gen('chained crt', '-chained.crt', chain, crt, pem)
+
+
+def start_servers(tokens):
+    address = ('localhost', 8080)
+    server = http.server.HTTPServer(address, HTTPRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    click.echo("Starting http server on %s:%s" % address)
+    thread.start()
+    time.sleep(0.1)
+    dnsaddress = ('localhost', 8053)
+    dnsserver = DNSServer(dnsaddress)
+    dnsthread = threading.Thread(target=dnsserver, daemon=True)
+    click.echo("Starting dns server on %s:%s" % dnsaddress)
+    dnsthread.start()
+    time.sleep(0.1)
+    if not thread.is_alive() or not dnsthread.is_alive():
+        fatal("Failed to start servers.")
+    dnsserver.tokens = server.tokens = tokens
 
 
 def domain_key(x):
@@ -797,6 +809,8 @@ def main(domains, dns, regenerate, staging, update, update_registration):
         domains = tuple(set(domains).union(cli_domains))
     domains = sorted(domains, key=domain_key)
     main = options.get('main', domains[0] if domains else None)
+    tokens = {}
+    start_servers(tokens)
     if domains:
         click.echo(click.style(
             "Domains to update: %s" % ", ".join(domains),
@@ -810,7 +824,13 @@ def main(domains, dns, regenerate, staging, update, update_registration):
         if update:
             if not yesno("Do you want to update with the above settings?"):
                 fatal('Aborted.')
-        generate(base, main, domains, challenges, regenerate, ca, update_registration)
+        acme_factory = partial(
+            ACME,
+            challenges=challenges,
+            ca=ca,
+            tokens=tokens,
+            update_registration=update_registration)
+        generate(base, main, acme_factory, domains, regenerate)
         with base.joinpath(main, 'options.json').open("w") as f:
             f.write(json.dumps(
                 dict(
@@ -818,6 +838,10 @@ def main(domains, dns, regenerate, staging, update, update_registration):
                     main=main,
                     domains=domains),
                 sort_keys=True, indent=4))
+    else:
+        click.echo("No domains given.")
+        click.echo("Use --help to print usage.")
+        click.pause("Press key to exit.")
 
 
 if __name__ == '__main__':
