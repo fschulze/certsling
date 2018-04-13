@@ -241,24 +241,14 @@ class AuthzCache:
 
 
 class ACME:
-    def __init__(self, authz_info, ca, session, challenges, tokens):
+    def __init__(self, authz_info, acme_uris, challenges, tokens):
         self.authz_info = authz_info
-        self.ca = ca
         self.challenges = challenges
-        self.uris = {}
-        self.session = session
+        self.acme_uris = acme_uris
         self.tokens = tokens
 
-    def update_directory(self):
-        res = self.session.get(self.ca + '/directory')
-        content_type = res.headers.get('Content-Type')
-        if res.status_code != 200 or content_type != 'application/json':
-            fatal_response(
-                "Couldn't get directory from CA server '%s'" % self.ca, res)
-        self.uris.update(res.json())
-
     def reg_post(self, uri, **kw):
-        response = self.session.post_signed(uri, **kw)
+        response = self.acme_uris.reg_post(uri, **kw)
         terms_uri = TERMS
         if 'terms-of-service' in response.links:
             terms_uri = response.links['terms-of-service']['url']
@@ -270,7 +260,7 @@ class ACME:
             return data
         click.echo("You have previously agreed the following terms:\n%s" % agreement)
         if yesno("Do you now want to agree to the following terms?\n%s" % terms_uri):
-            response = self.session.post_signed(
+            response = self.acme_uris.reg_post(
                 uri,
                 agreement=terms_uri,
                 **kw)
@@ -280,8 +270,7 @@ class ACME:
         return data
 
     def new_reg_post(self, email):
-        response = self.session.post_signed(
-            self.uris['new-reg'],
+        response = self.acme_uris.new_reg(
             resource="new-reg",
             contact=["mailto:" + email])
         if response.status_code == 200:
@@ -303,8 +292,7 @@ class ACME:
         return info
 
     def new_authz_post(self, domain):
-        response = self.session.post_signed(
-            self.uris['new-authz'],
+        response = self.acme_uris.new_authz(
             resource="new-authz",
             identifier=dict(
                 type="dns",
@@ -315,21 +303,21 @@ class ACME:
         fatal_response("Got error during new-authz", response)
 
     def authz_get(self, uri):
-        response = self.session.get(uri)
+        response = self.acme_uris.authz_get(uri)
         data = response.json()
         if response.status_code == 200:
             return data
         fatal_response('Got error reading authz info %s' % uri, response)
 
     def challenge_get(self, uri):
-        response = self.session.get(uri)
+        response = self.acme_uris.challenge_get(uri)
         data = response.json()
         if response.status_code == 202:
             return data
         fatal_response('Got error reading challenge info %s' % uri, response)
 
     def challenge_post(self, challenge, domain):
-        authorization = "{}.{}".format(challenge['token'], self.session.thumbprint)
+        authorization = self.acme_uris.authorization(challenge['token'])
         if challenge['type'] == 'dns-01':
             digest = hashlib.sha256(authorization.encode('ascii')).digest()
             txt = b64(digest)
@@ -337,7 +325,7 @@ class ACME:
             self.tokens[dns.name.from_text(domain)] = txt
         elif challenge['type'] == 'http-01':
             self.tokens[challenge['token']] = authorization.encode('ascii')
-        response = self.session.post_signed(
+        response = self.acme_uris.challenge_post(
             challenge['uri'],
             resource="challenge",
             type=challenge['type'],
@@ -433,8 +421,7 @@ class ACME:
         return challenge_info
 
     def new_cert_post(self, der):
-        response = self.session.post_signed(
-            self.uris['new-cert'],
+        response = self.acme_uris.new_cert(
             resource="new-cert",
             csr=b64(der))
         content_type = response.headers.get('Content-Type')
@@ -454,7 +441,6 @@ def gencrt(fn, acme_factory, check_registration, der, user_pub, email, domains):
     with der.open('rb') as f:
         der_data = f.read()
     acme = acme_factory()
-    acme.update_directory()
     genreg = partial(_genreg, acme=acme, email=email)
     check_registration(genreg)
     click.echo("Preparing challenges for %s." % ', '.join(domains))
@@ -521,7 +507,7 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, main, acme_factory, authz_cache_factory, domains, file_gens):
+def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, domains, file_gens):
     user_key = file_gens['file'](base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_gens['file'](base, 'user')(
@@ -553,7 +539,7 @@ def generate(base, main, acme_factory, authz_cache_factory, domains, file_gens):
         acme_factory = partial(
             acme_factory,
             authz_info=authz_cache_factory(base=key_base),
-            session=session)
+            acme_uris=acme_uris_factory(session=session))
         crt = date_gen('crt', '.crt', gencrt, acme_factory, check_registration, der, user_pub, base.name, domains)
         if verify_crt(crt, domains):
             break
@@ -678,9 +664,12 @@ def main(domains, dns, regenerate, staging, update, update_registration):
         acme_factory = partial(
             ACME,
             challenges=challenges,
-            ca=ca,
             tokens=tokens)
-        generate(base, main, acme_factory, authz_cache_factory, domains, file_gens)
+        acme_uris_factory = partial(acme.ACMEUris, ca=ca)
+        generate(
+            base, main,
+            acme_factory, acme_uris_factory, authz_cache_factory,
+            domains, file_gens)
         with base.joinpath(main, 'options.json').open("w") as f:
             f.write(json.dumps(
                 dict(

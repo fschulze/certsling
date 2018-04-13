@@ -1,3 +1,4 @@
+from .utils import fatal_response
 from base64 import urlsafe_b64encode
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -95,3 +96,24 @@ def get_session(jwk, priv):
         sign=partial(sign_sha256, priv=priv))
     thumbprint = get_thumbprint(jwk)
     return ACMESession(dumps_signed, thumbprint)
+
+
+class ACMEUris:
+    def __init__(self, ca, session):
+        self.session = session
+        res = session.get(ca + '/directory')
+        content_type = res.headers.get('Content-Type')
+        if res.status_code != 200 or content_type != 'application/json':
+            fatal_response(
+                "Couldn't get directory from CA server '%s'" % ca, res)
+        self.uris = res.json()
+        self.authz_get = session.get
+        self.challenge_get = session.get
+        self.challenge_post = session.post_signed
+        self.new_reg = partial(session.post_signed, self.uris['new-reg'])
+        self.new_authz = partial(session.post_signed, self.uris['new-authz'])
+        self.new_cert = partial(session.post_signed, self.uris['new-cert'])
+        self.reg_post = session.post_signed
+
+    def authorization(self, token):
+        return "{}.{}".format(token, self.session.thumbprint)

@@ -7,9 +7,16 @@ def acme_factory(ca):
     from certsling import ACME
     return partial(
         ACME,
-        ca=ca,
         challenges=[],
         tokens={})
+
+
+@pytest.fixture
+def acme_uris_factory(ca):
+    from certsling.acme import ACMEUris
+    return partial(
+        ACMEUris,
+        ca=ca)
 
 
 @pytest.fixture
@@ -19,11 +26,12 @@ def authz_cache_factory(ca):
 
 
 @pytest.fixture
-def generate(acme_factory, authz_cache_factory, base):
+def generate(acme_factory, acme_uris_factory, authz_cache_factory, base):
     from certsling import generate
     return partial(
         generate,
         acme_factory=acme_factory,
+        acme_uris_factory=acme_uris_factory,
         authz_cache_factory=authz_cache_factory,
         base=base)
 
