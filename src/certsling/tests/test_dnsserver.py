@@ -1,5 +1,5 @@
 def test_dns():
-    from certsling import DNSServer
+    from certsling.servers import DNSServer
     import dns.name
     request = b'\xed:\x00\x10\x00\x01\x00\x00\x00\x00\x00\x01\x0f_acMe-cHaLlenge\tLOcaLHOSt\x07ExaMPle\x03com\x00\x00\x10\x00\x01\x00\x00)\x10\x00\x00\x00\x80\x00\x00\x00'
     server = DNSServer(('127.0.0.1', 8053))
