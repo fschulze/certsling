@@ -25,21 +25,8 @@ import time
 
 CURL = 'curl'
 OPENSSL = 'openssl'
-OPENSSL_CONF = Path('/usr/local/etc/openssl/openssl.cnf')
 TERMS = "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf"
 LETSENCRYPT_CERT = 'lets-encrypt-x3-cross-signed'
-
-
-def get_openssl_conf():
-    output = subprocess.check_output([
-        OPENSSL, 'version', '-a'])
-    ssldir = [x for x in output.splitlines() if x.startswith(b'OPENSSLDIR:')]
-    if ssldir:
-        ssldir = Path(ssldir[0].decode('utf-8').split(':', 1)[1].strip().strip('"'))
-        sslconf = ssldir.joinpath('openssl.cnf')
-        if sslconf.exists():
-            return sslconf
-    return OPENSSL_CONF
 
 
 def genkey(fn, ask=False, keylen=4096):
@@ -64,12 +51,15 @@ def gencsr(fn, key, domains):
     if len(domains) > 1:
         config_fn = fn.parent.joinpath('openssl.cnf')
         with config_fn.open('wb') as config:
-            with get_openssl_conf().open('rb') as f:
-                data = f.read()
-                config.write(data)
-                if not data.endswith(b'\n'):
-                    config.write(b'\n')
-            lines = ['', '[SAN]', createSubjectAltName(domains), '']
+            lines = [
+                '[ req ]',
+                'distinguished_name  = req_distinguished_name',
+                '',
+                '[ req_distinguished_name ]',
+                '',
+                '[SAN]',
+                createSubjectAltName(domains),
+                '']
             config.write(bytes('\n'.join(lines).encode('ascii')))
         subprocess.check_call([
             OPENSSL, 'req', '-sha256', '-new',
