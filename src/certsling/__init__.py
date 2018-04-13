@@ -1,6 +1,5 @@
 from . import acme
-from .acme import b64
-from .utils import fatal, fatal_response, yesno
+from .utils import fatal, is_expired, yesno
 from .utils import _file_generator
 from .utils import _dated_file_generator
 from functools import partial
@@ -10,13 +9,11 @@ import base64
 import click
 import datetime
 import dns.message
-import dns.name
 import dns.rdtypes.ANY.TXT
 import dns.rrset
 import hashlib
 import http.server
 import json
-import requests
 import socket
 import subprocess
 import threading
@@ -25,7 +22,6 @@ import time
 
 CURL = 'curl'
 OPENSSL = 'openssl'
-TERMS = "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf"
 LETSENCRYPT_CERT = 'lets-encrypt-x3-cross-signed'
 
 
@@ -115,13 +111,6 @@ def verify_csr(csr, domains):
 def gender(fn, csr):
     subprocess.check_call([
         OPENSSL, 'req', '-outform', 'DER', '-out', str(fn), '-in', str(csr)])
-
-
-def is_expired(expires):
-    expires = datetime.datetime.strptime(
-        expires.split('.')[0].rstrip('Z'),
-        '%Y-%m-%dT%H:%M:%S')
-    return (expires - datetime.datetime.now()).total_seconds() < 300
 
 
 class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -229,199 +218,6 @@ class AuthzCache:
         with authz_info_fn.open('w') as f:
             f.write(json_data)
         return authz_info
-
-
-class ACME:
-    def __init__(self, authz_info, acme_uris, challenges, tokens):
-        self.authz_info = authz_info
-        self.challenges = challenges
-        self.acme_uris = acme_uris
-        self.tokens = tokens
-
-    def reg_post(self, uri, **kw):
-        response = self.acme_uris.reg_post(uri, **kw)
-        terms_uri = TERMS
-        if 'terms-of-service' in response.links:
-            terms_uri = response.links['terms-of-service']['url']
-        if response.status_code != 202:
-            fatal_response("Got error while updating registration", response)
-        data = response.json()
-        agreement = data.get('agreement')
-        if agreement == terms_uri:
-            return data
-        click.echo("You have previously agreed the following terms:\n%s" % agreement)
-        if yesno("Do you now want to agree to the following terms?\n%s" % terms_uri):
-            response = self.acme_uris.reg_post(
-                uri,
-                agreement=terms_uri,
-                **kw)
-            if response.status_code != 202:
-                fatal_response("Got error while updating registration", response)
-            data = response.json()
-        return data
-
-    def new_reg_post(self, email):
-        response = self.acme_uris.new_reg(
-            resource="new-reg",
-            contact=["mailto:" + email])
-        if response.status_code == 200:
-            info = response.json()
-        elif response.status_code == 201:
-            uri = response.headers.get('Location', '')
-            click.echo("Registration URI: %s" % uri)
-            info = self.reg_post(uri, resource="reg")
-        elif response.status_code == 409:
-            error = response.json()
-            if error.get('detail') != 'Registration key is already in use':
-                fatal_response("Got error during registration", response)
-            click.echo(click.style("Already registered.", fg='green'))
-            uri = response.headers.get('Location', '')
-            click.echo("Registration URI: %s" % uri)
-            info = self.reg_post(uri, resource="reg")
-        else:
-            fatal_response("Got unknown status during registration", response)
-        return info
-
-    def new_authz_post(self, domain):
-        response = self.acme_uris.new_authz(
-            resource="new-authz",
-            identifier=dict(
-                type="dns",
-                value=domain))
-        data = response.json()
-        if response.status_code == 201:
-            return response.headers['Location'], data
-        fatal_response("Got error during new-authz", response)
-
-    def authz_get(self, uri):
-        response = self.acme_uris.authz_get(uri)
-        data = response.json()
-        if response.status_code == 200:
-            return data
-        fatal_response('Got error reading authz info %s' % uri, response)
-
-    def challenge_get(self, uri):
-        response = self.acme_uris.challenge_get(uri)
-        data = response.json()
-        if response.status_code == 202:
-            return data
-        fatal_response('Got error reading challenge info %s' % uri, response)
-
-    def challenge_post(self, challenge, domain):
-        authorization = self.acme_uris.authorization(challenge['token'])
-        if challenge['type'] == 'dns-01':
-            digest = hashlib.sha256(authorization.encode('ascii')).digest()
-            txt = b64(digest)
-            click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
-            self.tokens[dns.name.from_text(domain)] = txt
-        elif challenge['type'] == 'http-01':
-            self.tokens[challenge['token']] = authorization.encode('ascii')
-        response = self.acme_uris.challenge_post(
-            challenge['uri'],
-            resource="challenge",
-            type=challenge['type'],
-            keyAuthorization=authorization)
-        data = response.json()
-        if response.status_code == 202:
-            time.sleep(1)
-            return data
-        if challenge['type'] == 'dns-01':
-            del self.tokens[dns.name.from_text(domain)]
-        elif challenge['type'] == 'http-01':
-            del self.tokens[challenge['token']]
-        if response.status_code == 400 and 'Response does not complete challenge' in data['detail']:
-            click.echo(click.style(data['detail'], fg="yellow"))
-            return
-        elif response.status_code == 400 and 'Challenge data was corrupted' in data['detail']:
-            click.echo(click.style(data['detail'], fg="yellow"))
-            return
-        fatal_response(
-            'Got error during challenge on %s' % challenge['uri'], response)
-
-    def challenge_info(self, domain):
-        authz_info = self.authz_info.load(domain)
-        challenge_info = {}
-        if 'authz-uri' in authz_info:
-            challenge_info = self.authz_get(authz_info['authz-uri'])
-            if 'expires' in challenge_info:
-                if is_expired(challenge_info['expires']):
-                    challenge_info = {}
-            status = challenge_info.get('status', 'pending')
-            if status not in ('pending', 'valid'):
-                challenge_info = {}
-        if not challenge_info:
-            authz_uri, challenge_info = self.new_authz_post(domain)
-            authz_info['authz-uri'] = authz_uri
-            if 'expires' in challenge_info:
-                authz_info['expires'] = challenge_info['expires']
-            self.authz_info.dump(domain, authz_info)
-        return challenge_info
-
-    def wait_for_challenge_response(self, uri, timeout):
-        while timeout:
-            data = self.challenge_get(uri)
-            if data['status'] == 'pending':
-                click.echo('Waiting for response ...')
-                time.sleep(1)
-                timeout = timeout - 1
-                continue
-            return data
-
-    def handle_challenge(self, uri, domain):
-        challenge = self.challenge_get(uri)
-        status = challenge.get('status', 'pending')
-        if status == 'pending':
-            click.echo(click.style(
-                "Trying challenge type '%s'." % challenge['type'],
-                fg="green"))
-            data = self.challenge_post(challenge, domain)
-            if data is None:
-                return False
-            challenge = self.wait_for_challenge_response(uri, 15)
-            if challenge is None:
-                return False
-        if challenge['status'] == 'invalid':
-            click.echo(click.style("Challenge invalid.", fg="yellow"))
-            if 'error' in challenge and 'detail' in challenge['error']:
-                click.echo(click.style(challenge['error']['detail'], fg='yellow'))
-            return False
-        elif challenge['status'] == 'valid':
-            click.echo(click.style("Challenge valid.", fg="green"))
-            return True
-        elif challenge['status'] == 'pending':
-            click.echo(click.style("Challenge pending."), fg="yellow")
-            if 'error' in challenge and 'detail' in challenge['error']:
-                click.echo(click.style(challenge['error']['detail'], fg='yellow'))
-            return False
-        elif challenge['status'] != 'valid':
-            fatal("Challenge for %s did not pass: %s" % (
-                domain, json.dumps(challenge, sort_keys=True, indent=4)))
-
-    def handle_authz(self, domain):
-        for challenge_type in self.challenges:
-            challenge_info = self.challenge_info(domain)
-            if challenge_info.get('status') == 'valid':
-                return challenge_info
-            challenge = [
-                x
-                for x in challenge_info['challenges']
-                if x['type'] == challenge_type][0]
-            if self.handle_challenge(challenge['uri'], domain):
-                break
-        challenge_info = self.challenge_info(domain)
-        return challenge_info
-
-    def new_cert_post(self, der):
-        response = self.acme_uris.new_cert(
-            resource="new-cert",
-            csr=b64(der))
-        links = []
-        if 'link' in response.headers:
-            links = requests.utils.parse_header_links(response.headers['Link'])
-        content_type = response.headers.get('Content-Type')
-        if response.status_code == 201 and content_type == 'application/pkix-cert':
-            return response.content, links
-        fatal_response("Got error during new-authz", response)
 
 
 def _genreg(fn, acme, email):
@@ -656,7 +452,7 @@ def main(domains, dns, regenerate, staging, update, update_registration):
             ca=ca,
             current=current)
         acme_factory = partial(
-            ACME,
+            acme.ACME,
             challenges=challenges,
             tokens=tokens)
         acme_uris_factory = partial(acme.ACMEUris, ca=ca)

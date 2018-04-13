@@ -4,7 +4,7 @@ import pytest
 
 @pytest.fixture
 def acme_factory(ca):
-    from certsling import ACME
+    from certsling.acme import ACME
     return partial(
         ACME,
         challenges=[],

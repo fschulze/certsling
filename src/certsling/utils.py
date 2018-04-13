@@ -1,4 +1,5 @@
 import click
+import datetime
 import json
 import sys
 
@@ -19,6 +20,13 @@ def fatal_response(msg, response, code=3):
         response.status_code, response.reason,
         json.dumps(data, sort_keys=True, indent=4),
         headers))
+
+
+def is_expired(expires):
+    expires = datetime.datetime.strptime(
+        expires.split('.')[0].rstrip('Z'),
+        '%Y-%m-%dT%H:%M:%S')
+    return (expires - datetime.datetime.now()).total_seconds() < 300
 
 
 def ensure_not_empty(fn):
