@@ -1,10 +1,9 @@
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
+from . import acme
+from .acme import b64
 from functools import partial
 from pathlib import Path
 import OpenSSL
 import base64
-import binascii
 import click
 import datetime
 import dns.message
@@ -14,7 +13,6 @@ import dns.rrset
 import hashlib
 import http.server
 import json
-import requests
 import socket
 import subprocess
 import sys
@@ -107,7 +105,7 @@ def ensure_not_empty(fn):
     return False
 
 
-def file_generator(base, name, update=False):
+def _file_generator(base, name, update=False):
     def generator(description, ext, generate, *args, **kw):
         fn = base.joinpath("%s%s" % (name, ext))
         rel = fn.relative_to(base)
@@ -121,7 +119,7 @@ def file_generator(base, name, update=False):
     return generator
 
 
-def dated_file_generator(base, name, date, current=False):
+def _dated_file_generator(base, name, date, current=False):
     def generator(description, ext, generate, *args, **kw):
         fn = base.joinpath("%s%s" % (name, ext))
         rel = fn.relative_to(base)
@@ -233,36 +231,6 @@ def gender(fn, csr):
         OPENSSL, 'req', '-outform', 'DER', '-out', str(fn), '-in', str(csr)])
 
 
-def b64(data):
-    return base64.urlsafe_b64encode(data).replace(b"=", b"").decode('ascii')
-
-
-def dumps(**kw):
-    return b64(json.dumps(dict(**kw), sort_keys=True).encode('utf-8'))
-
-
-def _leading_zeros(arg):
-    if len(arg) % 2:
-        return '0' + arg
-    return arg
-
-
-def _encode(data):
-    return b64(binascii.unhexlify(
-        _leading_zeros(hex(data)[2:].rstrip('L'))))
-
-
-def get_jwk(user_pub):
-    backend = default_backend()
-    with user_pub.open('rb') as f:
-        pub = serialization.load_pem_public_key(f.read(), backend)
-        pub_numbers = pub.public_numbers()
-        return dict(
-            kty="RSA",
-            e=_encode(pub_numbers.e),
-            n=_encode(pub_numbers.n))
-
-
 def is_expired(expires):
     expires = datetime.datetime.strptime(
         expires.split('.')[0].rstrip('Z'),
@@ -328,30 +296,30 @@ class DNSServer:
                     conn.send(reply)
 
 
+def check_acme_registration(genreg, jwk, file_generator):
+    click.echo("Checking registration at letsencrypt.")
+    reg_fn = file_generator(
+        'registration info', '.json', genreg)
+    with reg_fn.open() as f:
+        registration_info = json.load(f)
+    click.echo("Registered on %s via %s" % (
+        registration_info["createdAt"], registration_info["initialIp"]))
+    click.echo("Contact: %s" % ", ".join(registration_info["contact"]))
+    if 'agreement' in registration_info:
+        click.echo("Agreement: %s" % registration_info["agreement"])
+    if registration_info['key'] != jwk:
+        fatal("The public user key and the registration info don't match.")
+
+
 class ACME:
-    def __init__(self, ca, base, priv, jwk, challenges, tokens, current=False, update_registration=False):
+    def __init__(self, ca, base, session, challenges, tokens, current=False):
         self.ca = ca
         self.base = base
-        self.priv = priv
-        self.jwk = jwk
-        self.header = dict(
-            alg="RS256",
-            jwk=self.jwk.copy())
-        self.thumbprint = b64(hashlib.sha256(json.dumps(
-            self.jwk,
-            sort_keys=True,
-            separators=(',', ':')).encode('ascii')).digest())
         self.challenges = challenges
         self.current = current
-        self.update_registration = update_registration
-        self.session = requests.Session()
-        self.session.hooks = dict(response=self.response_hook)
         self.uris = {}
+        self.session = session
         self.tokens = tokens
-
-    def response_hook(self, response, *args, **kwargs):
-        if 'Replay-Nonce' in response.headers:
-            self.nonce = response.headers['Replay-Nonce']
 
     def update_directory(self):
         res = self.session.get(self.ca + '/directory')
@@ -361,26 +329,8 @@ class ACME:
                 "Couldn't get directory from CA server '%s'" % self.ca, res)
         self.uris.update(res.json())
 
-    def protected(self):
-        data = self.header.copy()
-        data['nonce'] = self.nonce
-        return b64(json.dumps(data, sort_keys=True, indent=4).encode('utf-8'))
-
-    def dumps_signed(self, **kw):
-        payload = dumps(**kw)
-        protected = self.protected()
-        sig_data = "%s.%s" % (protected, payload)
-        sig = OpenSSL.crypto.sign(
-            self.priv, sig_data.encode('ascii'), 'sha256')
-        data = dict(
-            header=self.header.copy(),
-            protected=protected,
-            payload=payload,
-            signature=b64(sig))
-        return data
-
     def reg_post(self, uri, **kw):
-        response = self.session.post(uri, json=self.dumps_signed(**kw))
+        response = self.session.post_signed(uri, **kw)
         terms_uri = TERMS
         if 'terms-of-service' in response.links:
             terms_uri = response.links['terms-of-service']['url']
@@ -392,19 +342,20 @@ class ACME:
             return data
         click.echo("You have previously agreed the following terms:\n%s" % agreement)
         if yesno("Do you now want to agree to the following terms?\n%s" % terms_uri):
-            response = self.session.post(
-                uri, json=self.dumps_signed(agreement=terms_uri, **kw))
+            response = self.session.post_signed(
+                uri,
+                agreement=terms_uri,
+                **kw)
             if response.status_code != 202:
                 fatal_response("Got error while updating registration", response)
             data = response.json()
         return data
 
     def new_reg_post(self, email):
-        response = self.session.post(
+        response = self.session.post_signed(
             self.uris['new-reg'],
-            json=self.dumps_signed(
-                resource="new-reg",
-                contact=["mailto:" + email]))
+            resource="new-reg",
+            contact=["mailto:" + email])
         if response.status_code == 200:
             info = response.json()
         elif response.status_code == 201:
@@ -423,29 +374,13 @@ class ACME:
             fatal_response("Got unknown status during registration", response)
         return info
 
-    def check_registration(self):
-        click.echo("Checking registration at letsencrypt.")
-        reg_fn = file_generator(
-            self.base, 'registration', update=self.update_registration)(
-            'registration info', '.json', genreg, self, self.base.name)
-        with reg_fn.open() as f:
-            registration_info = json.load(f)
-        click.echo("Registered on %s via %s" % (
-            registration_info["createdAt"], registration_info["initialIp"]))
-        click.echo("Contact: %s" % ", ".join(registration_info["contact"]))
-        if 'agreement' in registration_info:
-            click.echo("Agreement: %s" % registration_info["agreement"])
-        if registration_info['key'] != self.jwk:
-            fatal("The public user key and the registration info don't match.")
-
     def new_authz_post(self, domain):
-        response = self.session.post(
+        response = self.session.post_signed(
             self.uris['new-authz'],
-            json=self.dumps_signed(
-                resource="new-authz",
-                identifier=dict(
-                    type="dns",
-                    value=domain)))
+            resource="new-authz",
+            identifier=dict(
+                type="dns",
+                value=domain))
         data = response.json()
         if response.status_code == 201:
             return response.headers['Location'], data
@@ -466,7 +401,7 @@ class ACME:
         fatal_response('Got error reading challenge info %s' % uri, response)
 
     def challenge_post(self, challenge, domain):
-        authorization = "{}.{}".format(challenge['token'], self.thumbprint)
+        authorization = "{}.{}".format(challenge['token'], self.session.thumbprint)
         if challenge['type'] == 'dns-01':
             digest = hashlib.sha256(authorization.encode('ascii')).digest()
             txt = b64(digest)
@@ -474,12 +409,11 @@ class ACME:
             self.tokens[dns.name.from_text(domain)] = txt
         elif challenge['type'] == 'http-01':
             self.tokens[challenge['token']] = authorization.encode('ascii')
-        response = self.session.post(
+        response = self.session.post_signed(
             challenge['uri'],
-            json=self.dumps_signed(
-                resource="challenge",
-                type=challenge['type'],
-                keyAuthorization=authorization))
+            resource="challenge",
+            type=challenge['type'],
+            keyAuthorization=authorization)
         data = response.json()
         if response.status_code == 202:
             time.sleep(1)
@@ -599,30 +533,30 @@ class ACME:
         return challenge_info
 
     def new_cert_post(self, der):
-        response = self.session.post(
+        response = self.session.post_signed(
             self.uris['new-cert'],
-            json=self.dumps_signed(
-                resource="new-cert",
-                csr=b64(der)))
+            resource="new-cert",
+            csr=b64(der))
         content_type = response.headers.get('Content-Type')
         if response.status_code == 201 and content_type == 'application/pkix-cert':
             return response.content
         fatal_response("Got error during new-authz", response)
 
 
-def genreg(fn, acme, email):
+def _genreg(fn, acme, email):
     data = acme.new_reg_post(email)
     data = json.dumps(data, sort_keys=True, indent=4)
     with fn.open('w') as out:
         out.write(data)
 
 
-def gencrt(fn, acme_factory, der, user_pub, email, domains):
+def gencrt(fn, acme_factory, check_registration, der, user_pub, email, domains):
     with der.open('rb') as f:
         der_data = f.read()
     acme = acme_factory()
     acme.update_directory()
-    acme.check_registration()
+    genreg = partial(_genreg, acme=acme, email=email)
+    check_registration(genreg)
     click.echo("Preparing challenges for %s." % ', '.join(domains))
     for domain in domains:
         click.echo("Authorizing %s." % domain)
@@ -687,39 +621,45 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, main, acme_factory, domains, regenerate):
-    user_key = file_generator(base, 'user')(
+def generate(base, main, acme_factory, domains, file_gens):
+    user_key = file_gens['file'](base, 'user')(
         'private user key', '.key', genkey, ask=True)
-    user_pub = file_generator(base, 'user')(
+    user_pub = file_gens['file'](base, 'user')(
         'public user key', '.pub', genpub, user_key)
     assert user_pub.parent == base
     key_base = base.joinpath(main)
     if not key_base.exists():
         key_base.mkdir()
-    date = datetime.date.today().strftime("%Y%m%d")
-    key = dated_file_generator(key_base, main, date)(
+    key = file_gens['dated'](key_base, main)(
         'key', '.key', genkey)
-    current = 'force' if regenerate else True
-    date_gen = dated_file_generator(key_base, main, date, current=current)
+    date_gen = file_gens['current'](key_base, main)
     while True:
         csr = date_gen('csr', '.csr', gencsr, key, domains)
         if verify_csr(csr, domains):
             break
         remove(key_base, '*.csr', '*.crt', '*.der')
     with user_key.open('rb') as f:
-        priv = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, f.read())
-    jwk = get_jwk(user_pub)
+        priv = OpenSSL.crypto.load_privatekey(
+            OpenSSL.crypto.FILETYPE_PEM, f.read())
+    jwk = acme.get_jwk(user_pub)
+    session = acme.get_session(jwk, priv)
+    check_registration = partial(
+        check_acme_registration,
+        jwk=jwk,
+        file_generator=file_gens['registration'](base, 'registration'))
     while True:
         der = date_gen('der', '.der', gender, csr)
         assert der.parent == key_base
         acme_factory = partial(
-            acme_factory, base=key_base, priv=priv, jwk=jwk, current=current)
-        crt = date_gen('crt', '.crt', gencrt, acme_factory, der, user_pub, base.name, domains)
+            acme_factory,
+            base=key_base,
+            session=session)
+        crt = date_gen('crt', '.crt', gencrt, acme_factory, check_registration, der, user_pub, base.name, domains)
         if verify_crt(crt, domains):
             break
         remove(key_base, '*.crt', '*.der')
-    pem = dated_file_generator(
-        base, LETSENCRYPT_CERT, date)('pem', '.pem', getpem)
+    pem = file_gens['dated'](base, LETSENCRYPT_CERT)(
+        'pem', '.pem', getpem)
     date_gen('chained crt', '-chained.crt', chain, crt, pem)
 
 
@@ -772,6 +712,13 @@ def main(domains, dns, regenerate, staging, update, update_registration):
     else:
         ca = "https://acme-v01.api.letsencrypt.org"
     base = Path.cwd()
+    date = datetime.date.today().strftime("%Y%m%d")
+    current = 'force' if regenerate else True
+    file_gens = dict(
+        file=_file_generator,
+        dated=partial(_dated_file_generator, date=date),
+        current=partial(_dated_file_generator, date=date, current=current),
+        registration=partial(_file_generator, update=update_registration))
     cli_domains = sorted(domains, key=domain_key)
     options = dict(
         challenges=['http-01'])
@@ -828,9 +775,9 @@ def main(domains, dns, regenerate, staging, update, update_registration):
             ACME,
             challenges=challenges,
             ca=ca,
-            tokens=tokens,
-            update_registration=update_registration)
-        generate(base, main, acme_factory, domains, regenerate)
+            current=current,
+            tokens=tokens)
+        generate(base, main, acme_factory, domains, file_gens)
         with base.joinpath(main, 'options.json').open("w") as f:
             f.write(json.dumps(
                 dict(
