@@ -16,6 +16,7 @@ import dns.rrset
 import hashlib
 import http.server
 import json
+import requests
 import socket
 import subprocess
 import threading
@@ -424,9 +425,12 @@ class ACME:
         response = self.acme_uris.new_cert(
             resource="new-cert",
             csr=b64(der))
+        links = []
+        if 'link' in response.headers:
+            links = requests.utils.parse_header_links(response.headers['Link'])
         content_type = response.headers.get('Content-Type')
         if response.status_code == 201 and content_type == 'application/pkix-cert':
-            return response.content
+            return response.content, links
         fatal_response("Got error during new-authz", response)
 
 
@@ -449,7 +453,7 @@ def gencrt(fn, acme_factory, check_registration, der, user_pub, email, domains):
         info = acme.handle_authz(domain)
         if info.get('status') != 'valid':
             fatal("Couldn't finish authorization of '%s'." % domain)
-    cert = acme.new_cert_post(der_data)
+    (cert, issuer_cert_links) = acme.new_cert_post(der_data)
     with fn.open('wb') as out:
         out.write(b'-----BEGIN CERTIFICATE-----\n')
         out.write(base64.encodestring(cert))
