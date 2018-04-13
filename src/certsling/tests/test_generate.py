@@ -13,9 +13,19 @@ def acme_factory(ca):
 
 
 @pytest.fixture
-def generate(acme_factory, base):
+def authz_cache_factory(ca):
+    from certsling import AuthzCache
+    return partial(AuthzCache, ca=ca)
+
+
+@pytest.fixture
+def generate(acme_factory, authz_cache_factory, base):
     from certsling import generate
-    return partial(generate, acme_factory=acme_factory, base=base)
+    return partial(
+        generate,
+        acme_factory=acme_factory,
+        authz_cache_factory=authz_cache_factory,
+        base=base)
 
 
 def get_file_gens(date=None, regenerate=False, update_registration=False):

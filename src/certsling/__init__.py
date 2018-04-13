@@ -311,12 +311,45 @@ def check_acme_registration(genreg, jwk, file_generator):
         fatal("The public user key and the registration info don't match.")
 
 
-class ACME:
-    def __init__(self, ca, base, session, challenges, tokens, current=False):
-        self.ca = ca
-        self.base = base
-        self.challenges = challenges
+class AuthzCache:
+    def __init__(self, base, ca, current=False):
+        self.base = base.joinpath(
+            hashlib.md5(ca.encode('utf-8')).hexdigest())
         self.current = current
+
+    def authz_info_fn(self, domain):
+        if not self.base.is_dir():
+            self.base.mkdir()
+        return self.base.joinpath("%s.authz_info.json" % domain)
+
+    def load(self, domain):
+        authz_info_fn = self.authz_info_fn(domain)
+        authz_info = {}
+        if self.current is True and authz_info_fn.exists():
+            click.echo(click.style(
+                "Using existing challenge info for '%s'." % domain, fg="green"))
+            with authz_info_fn.open() as f:
+                authz_info = json.load(f)
+        if 'authz-uri' not in authz_info:
+            authz_info = {}
+        if 'expires' in authz_info:
+            if is_expired(authz_info['expires']):
+                authz_info = {}
+        return authz_info
+
+    def dump(self, domain, authz_info):
+        authz_info_fn = self.authz_info_fn(domain)
+        json_data = json.dumps(authz_info, sort_keys=True, indent=4)
+        with authz_info_fn.open('w') as f:
+            f.write(json_data)
+        return authz_info
+
+
+class ACME:
+    def __init__(self, authz_info, ca, session, challenges, tokens):
+        self.authz_info = authz_info
+        self.ca = ca
+        self.challenges = challenges
         self.uris = {}
         self.session = session
         self.tokens = tokens
@@ -431,39 +464,11 @@ class ACME:
         fatal_response(
             'Got error during challenge on %s' % challenge['uri'], response)
 
-    def authz_info_fn(self, domain):
-        return self.base.joinpath("%s.authz_info.json" % domain)
-
-    def load_authz_info(self, domain):
-        authz_info_fn = self.authz_info_fn(domain)
-        authz_info = {}
-        if self.current is True and authz_info_fn.exists():
-            click.echo(click.style(
-                "Using existing challenge info for '%s'." % domain, fg="green"))
-            with authz_info_fn.open() as f:
-                authz_info = json.load(f)
-        if 'authz-uri' not in authz_info:
-            authz_info = {}
-        if 'expires' in authz_info:
-            if is_expired(authz_info['expires']):
-                authz_info = {}
-        return authz_info
-
-    def dump_authz_info(self, domain, authz_info):
-        authz_info_fn = self.authz_info_fn(domain)
-        json_data = json.dumps(authz_info, sort_keys=True, indent=4)
-        with authz_info_fn.open('w') as f:
-            f.write(json_data)
-        return authz_info
-
     def challenge_info(self, domain):
-        authz_info = self.load_authz_info(domain)
+        authz_info = self.authz_info.load(domain)
         challenge_info = {}
         if 'authz-uri' in authz_info:
-            if authz_info['authz-uri'].startswith(self.ca):
-                challenge_info = self.authz_get(authz_info['authz-uri'])
-            else:
-                challenge_info = {}
+            challenge_info = self.authz_get(authz_info['authz-uri'])
             if 'expires' in challenge_info:
                 if is_expired(challenge_info['expires']):
                     challenge_info = {}
@@ -475,7 +480,7 @@ class ACME:
             authz_info['authz-uri'] = authz_uri
             if 'expires' in challenge_info:
                 authz_info['expires'] = challenge_info['expires']
-            self.dump_authz_info(domain, authz_info)
+            self.authz_info.dump(domain, authz_info)
         return challenge_info
 
     def wait_for_challenge_response(self, uri, timeout):
@@ -621,7 +626,7 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, main, acme_factory, domains, file_gens):
+def generate(base, main, acme_factory, authz_cache_factory, domains, file_gens):
     user_key = file_gens['file'](base, 'user')(
         'private user key', '.key', genkey, ask=True)
     user_pub = file_gens['file'](base, 'user')(
@@ -652,7 +657,7 @@ def generate(base, main, acme_factory, domains, file_gens):
         assert der.parent == key_base
         acme_factory = partial(
             acme_factory,
-            base=key_base,
+            authz_info=authz_cache_factory(base=key_base),
             session=session)
         crt = date_gen('crt', '.crt', gencrt, acme_factory, check_registration, der, user_pub, base.name, domains)
         if verify_crt(crt, domains):
@@ -771,13 +776,16 @@ def main(domains, dns, regenerate, staging, update, update_registration):
         if update:
             if not yesno("Do you want to update with the above settings?"):
                 fatal('Aborted.')
+        authz_cache_factory = partial(
+            AuthzCache,
+            ca=ca,
+            current=current)
         acme_factory = partial(
             ACME,
             challenges=challenges,
             ca=ca,
-            current=current,
             tokens=tokens)
-        generate(base, main, acme_factory, domains, file_gens)
+        generate(base, main, acme_factory, authz_cache_factory, domains, file_gens)
         with base.joinpath(main, 'options.json').open("w") as f:
             f.write(json.dumps(
                 dict(
