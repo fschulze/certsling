@@ -3,9 +3,19 @@ import pytest
 
 
 @pytest.fixture
-def generate(base, ca):
+def acme_factory(ca):
+    from certsling import ACME
+    return partial(
+        ACME,
+        ca=ca,
+        challenges=[],
+        tokens={})
+
+
+@pytest.fixture
+def generate(acme_factory, base):
     from certsling import generate
-    return partial(generate, base=base, ca=ca, challenges=[])
+    return partial(generate, acme_factory=acme_factory, base=base)
 
 
 def test_user_gen(base, generate, verify_crt_true, yesno_true):
@@ -13,7 +23,7 @@ def test_user_gen(base, generate, verify_crt_true, yesno_true):
     domains = ['example.com']
     generate(
         main=domains[0], domains=domains,
-        regenerate=False, update_registration=False)
+        regenerate=False)
     fns = list(x.name for x in base.iterdir())
     assert 'user.key' in fns
     assert 'user.pub' in fns
