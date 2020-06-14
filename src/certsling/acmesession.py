@@ -42,9 +42,13 @@ def get_thumbprint(jwk):
         separators=(',', ':')).encode('ascii')).digest())
 
 
-def protected(header, nonce):
+def protected(header, uri, nonce, kid):
     data = dict(header)
     data['nonce'] = nonce
+    data['url'] = uri
+    if kid is not None:
+        data.pop('jwk')
+        data['kid'] = kid
     return b64(json.dumps(data, sort_keys=True, indent=4).encode('utf-8'))
 
 
@@ -57,13 +61,12 @@ def dumps(**kw):
     return b64(json.dumps(dict(**kw), sort_keys=True).encode('utf-8'))
 
 
-def _dumps_signed(nonce, header, sign, **kw):
-    payload = dumps(**kw)
-    sig_data = "%s.%s" % (protected(header, nonce), payload)
+def _dumps_signed(nonce, uri, header, payload, sign, kid=None):
+    data = protected(header, uri, nonce, kid)
+    sig_data = "%s.%s" % (data, payload)
     signature = b64(sign(sig_data))
     data = dict(
-        header=dict(header),
-        protected=protected(header, nonce),
+        protected=data,
         payload=payload,
         signature=signature)
     return data
@@ -72,20 +75,38 @@ def _dumps_signed(nonce, header, sign, **kw):
 class ACMESession:
     def __init__(self, dumps_signed, thumbprint):
         self.dumps_signed = dumps_signed
+        self.kid = None
+        self.nonce = None
         self.thumbprint = thumbprint
         self.session = requests.Session()
         self.session.hooks = dict(response=self.response_hook)
         self.get = self.session.get
+        self.head = self.session.head
         self.post = self.session.post
 
     def response_hook(self, response, *args, **kwargs):
         if 'Replay-Nonce' in response.headers:
             self.nonce = response.headers['Replay-Nonce']
 
-    def post_signed(self, uri, **kw):
+    def post_jwk_signed(self, uri, **kw):
+        payload = dumps(**kw)
         return self.session.post(
             uri,
-            json=self.dumps_signed(self.nonce, **kw))
+            headers={'Content-Type': 'application/jose+json'},
+            json=self.dumps_signed(self.nonce, uri, payload=payload))
+
+    def post_kid_signed(self, uri, **kw):
+        payload = dumps(**kw)
+        return self.session.post(
+            uri,
+            headers={'Content-Type': 'application/jose+json'},
+            json=self.dumps_signed(self.nonce, uri, payload=payload, kid=self.kid))
+
+    def post_as_get(self, uri):
+        return self.session.post(
+            uri,
+            headers={'Content-Type': 'application/jose+json'},
+            json=self.dumps_signed(self.nonce, uri, payload="", kid=self.kid))
 
 
 def get_session(jwk, priv):

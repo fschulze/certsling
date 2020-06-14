@@ -7,7 +7,7 @@ import subprocess
 @pytest.fixture()
 def server_key(base, genkey):
     fn = base.joinpath('server.key')
-    genkey(fn)
+    genkey(fn, yesno=lambda m: True)
     return fn
 
 
@@ -20,7 +20,7 @@ def gencsr(base, server_key):
 @pytest.fixture()
 def ca_key(base, genkey):
     fn = base.joinpath('ca.key')
-    genkey(fn)
+    genkey(fn, yesno=lambda m: True)
     return fn
 
 

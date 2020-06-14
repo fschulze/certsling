@@ -1,15 +1,7 @@
 from .acmesession import b64
-from .utils import fatal, fatal_response, is_expired
+from .utils import fatal, fatal_response
 from functools import partial
 import click
-import dns.name
-import hashlib
-import json
-import requests
-import time
-
-
-TERMS = "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf"
 
 
 class ACMEUris:
@@ -21,207 +13,98 @@ class ACMEUris:
             fatal_response(
                 "Couldn't get directory from CA server '%s'" % ca, res)
         self.uris = res.json()
-        self.authz_get = session.get
-        self.challenge_get = session.get
-        self.challenge_post = session.post_signed
-        self.new_reg = partial(session.post_signed, self.uris['new-reg'])
-        self.new_authz = partial(session.post_signed, self.uris['new-authz'])
-        self.new_cert = partial(session.post_signed, self.uris['new-cert'])
-        self.reg_post = session.post_signed
-
-    def authorization(self, token):
-        return "{}.{}".format(token, self.session.thumbprint)
+        self.terms_uri = self.uris.get('meta', {}).get('termsOfService')
+        self.new_account = partial(session.post_jwk_signed, self.uris['newAccount'])
+        self.new_nonce = partial(session.head, self.uris['newNonce'])
+        self.new_order = partial(session.post_kid_signed, self.uris['newOrder'])
 
 
 class ACME:
-    def __init__(self, authz_info, acme_uris, challenges, tokens, yesno):
-        self.authz_info = authz_info
+    def __init__(self, acme_uris, challenges, tokens, yesno):
         self.challenges = challenges
         self.acme_uris = acme_uris
         self.tokens = tokens
         self.yesno = yesno
 
-    def reg_post(self, uri, **kw):
-        response = self.acme_uris.reg_post(uri, **kw)
-        terms_uri = TERMS
-        if 'terms-of-service' in response.links:
-            terms_uri = response.links['terms-of-service']['url']
-        if response.status_code != 202:
-            fatal_response("Got error while updating registration", response)
-        data = response.json()
-        agreement = data.get('agreement')
-        if agreement == terms_uri:
-            return data
-        click.echo("You have previously agreed the following terms:\n%s" % agreement)
-        if self.yesno("Do you now want to agree to the following terms?\n%s" % terms_uri):
-            response = self.acme_uris.reg_post(
-                uri,
-                agreement=terms_uri,
-                **kw)
-            if response.status_code != 202:
-                fatal_response("Got error while updating registration", response)
-            data = response.json()
-        return data
+    def authorized_token(self, token):
+        return "{}.{}".format(token, self.acme_uris.session.thumbprint).encode('ascii')
 
-    def new_reg_post(self, email):
-        response = self.acme_uris.new_reg(
-            resource="new-reg",
-            contact=["mailto:" + email])
-        if response.status_code == 200:
-            info = response.json()
-        elif response.status_code == 201:
-            uri = response.headers.get('Location', '')
-            click.echo("Registration URI: %s" % uri)
-            info = self.reg_post(uri, resource="reg")
-        elif response.status_code == 409:
-            error = response.json()
-            if error.get('detail') != 'Registration key is already in use':
-                fatal_response("Got error during registration", response)
-            click.echo(click.style("Already registered.", fg='green'))
-            uri = response.headers.get('Location', '')
-            click.echo("Registration URI: %s" % uri)
-            info = self.reg_post(uri, resource="reg")
-        else:
-            fatal_response("Got unknown status during registration", response)
-        return info
+    def ensure_account(self):
+        self.ensure_nonce()
+        if self.acme_uris.session.kid is None:
+            res = self.acme_uris.new_account(onlyReturnExisting=True)
+            if res.status_code != 200:
+                fatal_response("Bad account check response", res)
+            self.acme_uris.session.kid = res.headers['Location']
 
-    def new_authz_post(self, domain):
-        response = self.acme_uris.new_authz(
-            resource="new-authz",
-            identifier=dict(
-                type="dns",
-                value=domain))
-        data = response.json()
-        if response.status_code == 201:
-            return response.headers['Location'], data
-        fatal_response("Got error during new-authz", response)
+    def ensure_nonce(self):
+        if self.acme_uris.session.nonce is None:
+            res = self.acme_uris.new_nonce()
+            if res.status_code != 204:
+                fatal_response("Bad newNonce response", res)
 
-    def authz_get(self, uri):
-        response = self.acme_uris.authz_get(uri)
-        data = response.json()
-        if response.status_code == 200:
-            return data
-        fatal_response('Got error reading authz info %s' % uri, response)
+    def finalize_order(self, uri, der_data):
+        res = self.acme_uris.session.post_kid_signed(uri, csr=b64(der_data))
+        if res.status_code != 200:
+            fatal_response("Bad finalize order request", res)
+        return res.json()
 
-    def challenge_get(self, uri):
-        response = self.acme_uris.challenge_get(uri)
-        data = response.json()
-        if response.status_code == 202:
-            return data
-        fatal_response('Got error reading challenge info %s' % uri, response)
+    def get_certificate(self, uri):
+        res = self.acme_uris.session.post_as_get(uri)
+        if res.status_code != 200:
+            fatal_response("Bad get certificate request", res)
+        return res.content
 
-    def challenge_post(self, challenge, domain):
-        authorization = self.acme_uris.authorization(challenge['token'])
-        if challenge['type'] == 'dns-01':
-            digest = hashlib.sha256(authorization.encode('ascii')).digest()
-            txt = b64(digest)
-            click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
-            self.tokens[dns.name.from_text(domain)] = txt
-        elif challenge['type'] == 'http-01':
-            self.tokens[challenge['token']] = authorization.encode('ascii')
-        response = self.acme_uris.challenge_post(
-            challenge['uri'],
-            resource="challenge",
-            type=challenge['type'],
-            keyAuthorization=authorization)
-        data = response.json()
-        if response.status_code == 202:
-            time.sleep(1)
-            return data
-        if challenge['type'] == 'dns-01':
-            del self.tokens[dns.name.from_text(domain)]
-        elif challenge['type'] == 'http-01':
-            del self.tokens[challenge['token']]
-        if response.status_code == 400 and 'Response does not complete challenge' in data['detail']:
-            click.echo(click.style(data['detail'], fg="yellow"))
+    def handle_authorization(self, uri):
+        res = self.acme_uris.session.post_as_get(uri)
+        if res.status_code != 200:
+            fatal_response("Bad authorization response", res)
+        data = res.json()
+        if data.get('status') == 'valid':
+            self.tokens.set_status(uri, 'valid')
             return
-        elif response.status_code == 400 and 'Challenge data was corrupted' in data['detail']:
-            click.echo(click.style(data['detail'], fg="yellow"))
-            return
-        fatal_response(
-            'Got error during challenge on %s' % challenge['uri'], response)
-
-    def challenge_info(self, domain):
-        authz_info = self.authz_info.load(domain)
-        challenge_info = {}
-        if 'authz-uri' in authz_info:
-            challenge_info = self.authz_get(authz_info['authz-uri'])
-            if 'expires' in challenge_info:
-                if is_expired(challenge_info['expires']):
-                    challenge_info = {}
-            status = challenge_info.get('status', 'pending')
-            if status not in ('pending', 'valid'):
-                challenge_info = {}
-        if not challenge_info:
-            authz_uri, challenge_info = self.new_authz_post(domain)
-            authz_info['authz-uri'] = authz_uri
-            if 'expires' in challenge_info:
-                authz_info['expires'] = challenge_info['expires']
-            self.authz_info.dump(domain, authz_info)
-        return challenge_info
-
-    def wait_for_challenge_response(self, uri, timeout):
-        while timeout:
-            data = self.challenge_get(uri)
-            if data['status'] == 'pending':
-                click.echo('Waiting for response ...')
-                time.sleep(1)
-                timeout = timeout - 1
-                continue
-            return data
-
-    def handle_challenge(self, uri, domain):
-        challenge = self.challenge_get(uri)
-        status = challenge.get('status', 'pending')
-        if status == 'pending':
-            click.echo(click.style(
-                "Trying challenge type '%s'." % challenge['type'],
-                fg="green"))
-            data = self.challenge_post(challenge, domain)
-            if data is None:
-                return False
-            challenge = self.wait_for_challenge_response(uri, 15)
-            if challenge is None:
-                return False
-        if challenge['status'] == 'invalid':
-            click.echo(click.style("Challenge invalid.", fg="yellow"))
-            if 'error' in challenge and 'detail' in challenge['error']:
-                click.echo(click.style(challenge['error']['detail'], fg='yellow'))
-            return False
-        elif challenge['status'] == 'valid':
-            click.echo(click.style("Challenge valid.", fg="green"))
-            return True
-        elif challenge['status'] == 'pending':
-            click.echo(click.style("Challenge pending."), fg="yellow")
-            if 'error' in challenge and 'detail' in challenge['error']:
-                click.echo(click.style(challenge['error']['detail'], fg='yellow'))
-            return False
-        elif challenge['status'] != 'valid':
-            fatal("Challenge for %s did not pass: %s" % (
-                domain, json.dumps(challenge, sort_keys=True, indent=4)))
-
-    def handle_authz(self, domain):
+        domain = data['identifier']['value']
+        click.echo("Authorizing %s." % domain)
         for challenge_type in self.challenges:
-            challenge_info = self.challenge_info(domain)
-            if challenge_info.get('status') == 'valid':
-                return challenge_info
-            challenge = [
-                x
-                for x in challenge_info['challenges']
-                if x['type'] == challenge_type][0]
-            if self.handle_challenge(challenge['uri'], domain):
-                break
-        challenge_info = self.challenge_info(domain)
-        return challenge_info
+            for challenge in data['challenges']:
+                if challenge['type'] != challenge_type:
+                    continue
+                authorized_token = self.authorized_token(challenge['token'])
+                if challenge_type == 'dns-01':
+                    self.tokens.add_dns_reply(
+                        uri, domain, authorized_token)
+                elif challenge_type == 'http-01':
+                    self.tokens.add_http_reply(
+                        uri, challenge['token'], authorized_token)
+                res = self.acme_uris.session.post_kid_signed(challenge['url'])
+                if res.status_code != 200:
+                    fatal_response("Bad challenge request %s" % challenge, res)
 
-    def new_cert_post(self, der):
-        response = self.acme_uris.new_cert(
-            resource="new-cert",
-            csr=b64(der))
-        links = []
-        if 'link' in response.headers:
-            links = requests.utils.parse_header_links(response.headers['Link'])
-        content_type = response.headers.get('Content-Type')
-        if response.status_code == 201 and content_type == 'application/pkix-cert':
-            return response.content, links
-        fatal_response("Got error during new-authz", response)
+    def handle_order(self, domains):
+        self.ensure_account()
+        res = self.acme_uris.new_order(identifiers=[
+            dict(type="dns", value=domain)
+            for domain in domains])
+        if res.status_code != 201:
+            fatal_response("Bad newOrder response", res)
+        return res.headers['Location'], res.json()
+
+    def new_account(self, email):
+        self.ensure_nonce()
+        question = "Do you agree to the terms of service"
+        if self.acme_uris.terms_uri:
+            question = "%s at %s" % (question, self.acme_uris.terms_uri)
+        if not self.yesno(question):
+            fatal("Didn't agree to terms of service.")
+        res = self.acme_uris.new_account(
+            contact=["mailto:" + email],
+            termsOfServiceAgreed=True)
+        if res.status_code == 201:
+            return res.json()
+        fatal_response("Bad newAccount response", res)
+
+    def poll_order(self, uri):
+        res = self.acme_uris.session.post_as_get(uri)
+        if res.status_code != 200:
+            fatal_response("Bad order poll response", res)
+        return res.json()

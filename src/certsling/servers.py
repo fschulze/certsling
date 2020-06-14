@@ -1,12 +1,36 @@
+from .acmesession import b64
 from .utils import fatal
 import click
+import dns.name
 import dns.message
 import dns.rdtypes.ANY.TXT
 import dns.rrset
+import hashlib
 import http.server
 import socket
 import threading
 import time
+
+
+class Tokens(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._status = {}
+
+    def add_dns_reply(self, uri, domain, authorized_token):
+        digest = hashlib.sha256(authorized_token).digest()
+        txt = b64(digest)
+        click.echo('_acme-challenge.%s. IN TXT "%s"' % (domain, txt))
+        self[dns.name.from_text(domain)] = (uri, txt)
+
+    def add_http_reply(self, uri, token, authorized_token):
+        self[token] = (uri, authorized_token)
+
+    def set_status(self, uri, status):
+        self._status[uri] = status
+
+    def get_status(self, uri):
+        return self._status.get(uri, 'unknown')
 
 
 class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -23,7 +47,9 @@ class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(self.server.tokens[token])
+        (uri, reply) = self.server.tokens[token]
+        self.wfile.write(reply)
+        self.server.tokens.set_status(uri, 'requested')
 
 
 class DNSServer:
@@ -42,13 +68,14 @@ class DNSServer:
             print('Got request from %s for domain %s.' % (addr, domain))
             if domain not in self.tokens:
                 continue
-            txt = self.tokens[domain]
+            (uri, txt) = self.tokens[domain]
             print('Answering with "%s" to %s for domain %s.' % (txt, addr, domain))
             response.answer.append(dns.rrset.from_rdata(
                 question.name,
                 0,
                 dns.rdtypes.ANY.TXT.TXT(
                     question.rdclass, question.rdtype, [txt.encode('ascii')])))
+            self.tokens.set_status(uri, 'requested')
         return response.to_wire()
 
     def __call__(self):

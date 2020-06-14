@@ -1,21 +1,19 @@
 from . import acme
 from . import acmesession
-from .servers import start_servers
-from .utils import fatal, is_expired, yesno as _yesno
+from .servers import Tokens, start_servers
+from .utils import fatal, yesno as _yesno
 from .utils import _file_generator
 from .utils import _dated_file_generator
 from functools import partial
 from pathlib import Path
 import OpenSSL
-import base64
 import click
 import datetime
-import hashlib
 import json
 import subprocess
+import time
 
 
-CURL = 'curl'
 OPENSSL = 'openssl'
 LETSENCRYPT_CERT = 'lets-encrypt-x3-cross-signed'
 
@@ -123,42 +121,8 @@ def check_acme_registration(genreg, jwk, file_generator):
         fatal("The public user key and the registration info don't match.")
 
 
-class AuthzCache:
-    def __init__(self, base, ca, current=False):
-        self.base = base.joinpath(
-            hashlib.md5(ca.encode('utf-8')).hexdigest())
-        self.current = current
-
-    def authz_info_fn(self, domain):
-        if not self.base.is_dir():
-            self.base.mkdir()
-        return self.base.joinpath("%s.authz_info.json" % domain)
-
-    def load(self, domain):
-        authz_info_fn = self.authz_info_fn(domain)
-        authz_info = {}
-        if self.current is True and authz_info_fn.exists():
-            click.echo(click.style(
-                "Using existing challenge info for '%s'." % domain, fg="green"))
-            with authz_info_fn.open() as f:
-                authz_info = json.load(f)
-        if 'authz-uri' not in authz_info:
-            authz_info = {}
-        if 'expires' in authz_info:
-            if is_expired(authz_info['expires']):
-                authz_info = {}
-        return authz_info
-
-    def dump(self, domain, authz_info):
-        authz_info_fn = self.authz_info_fn(domain)
-        json_data = json.dumps(authz_info, sort_keys=True, indent=4)
-        with authz_info_fn.open('w') as f:
-            f.write(json_data)
-        return authz_info
-
-
 def _genreg(fn, acme, email):
-    data = acme.new_reg_post(email)
+    data = acme.new_account(email)
     data = json.dumps(data, sort_keys=True, indent=4)
     with fn.open('w') as out:
         out.write(data)
@@ -171,16 +135,30 @@ def gencrt(fn, acme_factory, check_registration, der, user_pub, email, domains):
     genreg = partial(_genreg, acme=acme, email=email)
     check_registration(genreg)
     click.echo("Preparing challenges for %s." % ', '.join(domains))
-    for domain in domains:
-        click.echo("Authorizing %s." % domain)
-        info = acme.handle_authz(domain)
-        if info.get('status') != 'valid':
-            fatal("Couldn't finish authorization of '%s'." % domain)
-    (cert, issuer_cert_links) = acme.new_cert_post(der_data)
-    with fn.open('wb') as out:
-        out.write(b'-----BEGIN CERTIFICATE-----\n')
-        out.write(base64.encodestring(cert))
-        out.write(b'-----END CERTIFICATE-----\n')
+    (order_uri, info) = acme.handle_order(domains)
+    if info['status'] == 'pending':
+        for authorization in info['authorizations']:
+            acme.handle_authorization(authorization)
+        count = 0
+    while info['status'] == 'pending':
+        while count < 5:
+            authorizations_ok = [
+                acme.tokens.get_status(authorization) in ('requested', 'valid')
+                for authorization in info['authorizations']]
+            if all(authorizations_ok):
+                break
+            click.echo(".", nl=False)
+            time.sleep(1)
+            count += 1
+        info = acme.poll_order(order_uri)
+    if info.get('status') == 'ready':
+        info = acme.finalize_order(info['finalize'], der_data)
+    if info.get('status') == 'valid':
+        cert = acme.get_certificate(info['certificate'])
+        with fn.open('wb') as out:
+            out.write(cert)
+    else:
+        fatal("Failed to get certificate.")
 
 
 def verify_crt(crt, domains):
@@ -206,11 +184,6 @@ def verify_crt(crt, domains):
     return True
 
 
-def getpem(fn):
-    subprocess.check_call([
-        CURL, '-o', str(fn), 'https://letsencrypt.org/certs/%s.pem' % LETSENCRYPT_CERT])
-
-
 def chain(fn, crt, pem):
     with fn.open('wb') as out:
         for name in (crt, pem):
@@ -234,7 +207,7 @@ def remove(yesno, base, *patterns):
             fn.unlink()
 
 
-def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, domains, file_gens, yesno):
+def generate(base, main, acme_factory, acme_uris_factory, domains, file_gens, yesno):
     user_key = file_gens['file'](base, 'user')(
         'private user key', '.key', genkey, yesno=yesno, ask=True)
     user_pub = file_gens['file'](base, 'user')(
@@ -265,15 +238,11 @@ def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, d
         assert der.parent == key_base
         acme_factory = partial(
             acme_factory,
-            authz_info=authz_cache_factory(base=key_base),
             acme_uris=acme_uris_factory(session=session))
-        crt = date_gen('crt', '.crt', gencrt, acme_factory, check_registration, der, user_pub, base.name, domains)
+        crt = date_gen('chained crt', '-chained.crt', gencrt, acme_factory, check_registration, der, user_pub, base.name, domains)
         if verify_crt(crt, domains):
             break
         remove(yesno, key_base, '*.crt', '*.der')
-    pem = file_gens['dated'](base, LETSENCRYPT_CERT)(
-        'pem', '.pem', getpem)
-    date_gen('chained crt', '-chained.crt', chain, crt, pem)
 
 
 def domain_key(x):
@@ -310,9 +279,9 @@ def main(domains, dns, http, regenerate, staging, update, update_registration, y
     the same day."""
     yesno = partial(_yesno, always_yes=yes)
     if staging:
-        ca = "https://acme-staging.api.letsencrypt.org"
+        ca = "https://acme-staging-v02.api.letsencrypt.org"
     else:
-        ca = "https://acme-v01.api.letsencrypt.org"
+        ca = "https://acme-v02.api.letsencrypt.org"
     base = Path.cwd()
     date = datetime.date.today().strftime("%Y%m%d")
     current = 'force' if regenerate else True
@@ -363,7 +332,7 @@ def main(domains, dns, http, regenerate, staging, update, update_registration, y
         domains = tuple(set(domains).union(cli_domains))
     domains = sorted(domains, key=domain_key)
     main = options.get('main', domains[0] if domains else None)
-    tokens = {}
+    tokens = Tokens()
     start_servers(challenges, tokens)
     if domains:
         click.echo(click.style(
@@ -378,10 +347,6 @@ def main(domains, dns, http, regenerate, staging, update, update_registration, y
         if update:
             if not yesno("Do you want to update with the above settings?"):
                 fatal('Aborted.')
-        authz_cache_factory = partial(
-            AuthzCache,
-            ca=ca,
-            current=current)
         acme_factory = partial(
             acme.ACME,
             challenges=challenges,
@@ -390,7 +355,7 @@ def main(domains, dns, http, regenerate, staging, update, update_registration, y
         acme_uris_factory = partial(acme.ACMEUris, ca=ca)
         generate(
             base, main,
-            acme_factory, acme_uris_factory, authz_cache_factory,
+            acme_factory, acme_uris_factory,
             domains, file_gens, yesno)
         with base.joinpath(main, 'options.json').open("w") as f:
             f.write(json.dumps(

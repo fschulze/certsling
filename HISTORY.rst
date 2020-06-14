@@ -4,6 +4,9 @@ Changelog
 0.9.0 - Unreleased
 ------------------
 
+* Switch to ACME Version 2 aka RFC 8555 protocol.
+  [fschulze]
+
 * Enable ``-h`` for command line help output.
   [fschulze]
 

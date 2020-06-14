@@ -8,7 +8,8 @@ def acme_factory(ca):
     return partial(
         ACME,
         challenges=[],
-        tokens={})
+        tokens={},
+        yesno=lambda m: True)
 
 
 @pytest.fixture
@@ -20,19 +21,12 @@ def acme_uris_factory(ca):
 
 
 @pytest.fixture
-def authz_cache_factory(ca):
-    from certsling import AuthzCache
-    return partial(AuthzCache, ca=ca)
-
-
-@pytest.fixture
-def generate(acme_factory, acme_uris_factory, authz_cache_factory, base):
+def generate(acme_factory, acme_uris_factory, base):
     from certsling import generate
     return partial(
         generate,
         acme_factory=acme_factory,
         acme_uris_factory=acme_uris_factory,
-        authz_cache_factory=authz_cache_factory,
         base=base)
 
 
@@ -50,12 +44,13 @@ def get_file_gens(date=None, regenerate=False, update_registration=False):
         registration=partial(_file_generator, update=update_registration))
 
 
-def test_user_gen(base, generate, verify_crt_true, yesno_true):
+def test_user_gen(base, generate, verify_crt_true):
     assert list(base.iterdir()) == []
     domains = ['example.com']
     generate(
         main=domains[0], domains=domains,
-        file_gens=get_file_gens())
+        file_gens=get_file_gens(),
+        yesno=lambda m, default=None: True)
     fns = list(x.name for x in base.iterdir())
     assert 'user.key' in fns
     assert 'user.pub' in fns

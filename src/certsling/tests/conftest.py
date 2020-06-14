@@ -15,15 +15,26 @@ def d64(data):
 
 
 class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    def make_url(self, path):
+        addr = "http://%s:%s/{0}" % self.server.socket.getsockname()
+        return addr.format(path)
+
     def do_GET(self):
         if self.path == '/directory':
             self.send_response(200)
             self.send_header('Replay-Nonce', 'nonce')
-            methods = ['new-authz', 'new-cert', 'new-reg']
-            addr = "http://%s:%s/{0}" % self.server.socket.getsockname()
-            self.write_response({x: addr.format(x) for x in methods})
+            methods = ['newAccount', 'newNonce', 'newOrder']
+            self.write_response({x: self.make_url(x) for x in methods})
         else:
             raise ValueError("GET %s" % self.path)
+
+    def do_HEAD(self):
+        if self.path == '/newNonce':
+            self.send_response(200)
+            self.send_header('Replay-Nonce', 'nonce')
+            self.end_headers()
+        else:
+            raise ValueError("POST %s" % self.path)
 
     @property
     def data(self):
@@ -47,26 +58,35 @@ class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(response.encode('ascii'))
 
     def do_POST(self):
-        if self.path == '/new-authz':
+        if self.path == '/newOrder':
             payload = self.get_payload()
             self.send_response(201)
             self.send_header('Location', '')
-            self.write_response({'status': 'valid'})
-        elif self.path == '/new-cert':
-            payload = self.get_payload()
-            self.send_response(201)
-            self.send_header('Content-Type', 'application/pkix-cert')
-            self.end_headers()
-            self.wfile.write(b'cert')
-        elif self.path == '/new-reg':
+            self.write_response({
+                'status': 'valid',
+                'certificate': self.make_url('certificate')})
+        elif self.path == '/newAccount':
             payload = self.get_payload()
             protected = self.get_protected()
+            if 'onlyReturnExisting' in payload:
+                if protected['jwk']['n'] in self.server.accounts:
+                    self.send_response(200)
+                    self.send_header('Location', self.make_url('account/1'))
+                    self.end_headers()
+                else:
+                    self.send_response(400)
+                    self.end_headers()
+            else:
+                self.send_response(201)
+                self.write_response({
+                    'createdAt': 'createdAt',
+                    'initialIp': 'initialIp',
+                    'contact': payload['contact'],
+                    'key': protected['jwk']})
+                self.server.accounts[protected['jwk']['n']] = True
+        elif self.path == '/certificate':
             self.send_response(200)
-            self.write_response({
-                'createdAt': 'createdAt',
-                'initialIp': 'initialIp',
-                'contact': payload['contact'],
-                'key': protected['jwk']})
+            self.end_headers()
         else:
             raise ValueError("POST %s" % self.path)
 
@@ -78,6 +98,7 @@ class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 def server():
     address = ('localhost', 0)
     server = http.server.HTTPServer(address, HTTPRequestHandler)
+    server.accounts = {}
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield server
@@ -102,11 +123,6 @@ def genkey(monkeypatch):
 def base(tmpdir):
     from pathlib import Path
     return Path(tmpdir.ensure_dir('foo@example.com').strpath)
-
-
-@pytest.fixture
-def yesno_true(monkeypatch):
-    monkeypatch.setattr("certsling.yesno", lambda *x: True)
 
 
 @pytest.fixture
