@@ -100,7 +100,7 @@ def yesno(question, default=None, all=False):
             True: ('y', 'yes'),
         }
     if all:
-        if default is 'all':
+        if default == 'all':
             answers['all'] = ('', 'a', 'all')
             question = "%s/All" % question
         else:
