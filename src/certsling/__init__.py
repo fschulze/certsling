@@ -359,7 +359,7 @@ def main(domains, dns, http, regenerate, staging, update, update_registration):
     domains = sorted(domains, key=domain_key)
     main = options.get('main', domains[0] if domains else None)
     tokens = {}
-    start_servers(tokens)
+    start_servers(challenges, tokens)
     if domains:
         click.echo(click.style(
             "Domains to update: %s" % ", ".join(domains),

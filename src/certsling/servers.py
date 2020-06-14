@@ -67,19 +67,24 @@ class DNSServer:
                     conn.send(reply)
 
 
-def start_servers(tokens):
-    address = ('localhost', 8080)
-    server = http.server.HTTPServer(address, HTTPRequestHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    click.echo("Starting http server on %s:%s" % address)
-    thread.start()
-    time.sleep(0.1)
-    dnsaddress = ('localhost', 8053)
-    dnsserver = DNSServer(dnsaddress)
-    dnsthread = threading.Thread(target=dnsserver, daemon=True)
-    click.echo("Starting dns server on %s:%s" % dnsaddress)
-    dnsthread.start()
-    time.sleep(0.1)
-    if not thread.is_alive() or not dnsthread.is_alive():
-        fatal("Failed to start servers.")
-    dnsserver.tokens = server.tokens = tokens
+def start_servers(challenges, tokens):
+    if any(x.startswith('http') for x in challenges):
+        address = ('localhost', 8080)
+        server = http.server.HTTPServer(address, HTTPRequestHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        click.echo("Starting http server on %s:%s" % address)
+        thread.start()
+        time.sleep(0.1)
+        if not thread.is_alive():
+            fatal("Failed to start HTTP server on port 8080.")
+        server.tokens = tokens
+    if any(x.startswith('dns') for x in challenges):
+        dnsaddress = ('localhost', 8053)
+        dnsserver = DNSServer(dnsaddress)
+        dnsthread = threading.Thread(target=dnsserver, daemon=True)
+        click.echo("Starting dns server on %s:%s" % dnsaddress)
+        dnsthread.start()
+        time.sleep(0.1)
+        if not dnsthread.is_alive():
+            fatal("Failed to start DNS server on port 8053.")
+        dnsserver.tokens = tokens

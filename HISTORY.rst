@@ -10,6 +10,9 @@ Changelog
 * Add option to disable HTTP challenge.
   [fschulze]
 
+* Only start servers for enabled challenges.
+  [fschulze]
+
 
 0.8.0 - 2017-01-04
 ------------------
