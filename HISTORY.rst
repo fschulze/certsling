@@ -1,7 +1,7 @@
 Changelog
 =========
 
-0.9.0 - Unreleased
+0.9.0 - 2020-06-14
 ------------------
 
 * Switch to ACME Version 2 aka RFC 8555 protocol.

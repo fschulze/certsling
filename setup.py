@@ -8,7 +8,7 @@ HISTORY = open(os.path.abspath('HISTORY.rst')).read()
 
 setup(
     name='certsling',
-    version='0.9.0.dev0',
+    version='0.9.0',
     description='Opinionated letsencrypt acme client working via a ssh port forward.',
     long_description="\n\n".join([README, HISTORY]),
     url='https://github.com/fschulze/certsling',
@@ -17,6 +17,7 @@ setup(
         "Intended Audience :: System Administrators",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python",
+        "Programming Language :: Python :: 3 :: Only",
         "Programming Language :: Python :: 3.5",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
@@ -29,4 +30,5 @@ setup(
     entry_points={
         'console_scripts': ['certsling = certsling:main']},
     packages=['certsling'],
-    package_dir={'': 'src'})
+    package_dir={'': 'src'},
+    python_requires='>=3.5')
