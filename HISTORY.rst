@@ -17,6 +17,9 @@ Changelog
   Python 3.5 support will end at it's EOL in September 2020.
   [fschulze]
 
+* Exit when no domain was provided.
+  [fschulze]
+
 
 0.8.0 - 2017-01-04
 ------------------

@@ -395,9 +395,9 @@ def main(domains, dns, http, regenerate, staging, update, update_registration):
                     domains=domains),
                 sort_keys=True, indent=4))
     else:
-        click.echo("No domains given.")
-        click.echo("Use --help to print usage.")
-        click.pause("Press key to exit.")
+        fatal(
+            "No domains given.\n"
+            "Use --help to print usage.")
 
 
 if __name__ == '__main__':
