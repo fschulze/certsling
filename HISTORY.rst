@@ -20,6 +20,8 @@ Changelog
 * Exit when no domain was provided.
   [fschulze]
 
+* Add ``-y`` option to automatically answer yes for any question.
+
 
 0.8.0 - 2017-01-04
 ------------------

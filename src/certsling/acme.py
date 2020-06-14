@@ -1,5 +1,5 @@
 from .acmesession import b64
-from .utils import fatal, fatal_response, is_expired, yesno
+from .utils import fatal, fatal_response, is_expired
 from functools import partial
 import click
 import dns.name
@@ -34,11 +34,12 @@ class ACMEUris:
 
 
 class ACME:
-    def __init__(self, authz_info, acme_uris, challenges, tokens):
+    def __init__(self, authz_info, acme_uris, challenges, tokens, yesno):
         self.authz_info = authz_info
         self.challenges = challenges
         self.acme_uris = acme_uris
         self.tokens = tokens
+        self.yesno = yesno
 
     def reg_post(self, uri, **kw):
         response = self.acme_uris.reg_post(uri, **kw)
@@ -52,7 +53,7 @@ class ACME:
         if agreement == terms_uri:
             return data
         click.echo("You have previously agreed the following terms:\n%s" % agreement)
-        if yesno("Do you now want to agree to the following terms?\n%s" % terms_uri):
+        if self.yesno("Do you now want to agree to the following terms?\n%s" % terms_uri):
             response = self.acme_uris.reg_post(
                 uri,
                 agreement=terms_uri,

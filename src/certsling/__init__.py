@@ -1,7 +1,7 @@
 from . import acme
 from . import acmesession
 from .servers import start_servers
-from .utils import fatal, is_expired, yesno
+from .utils import fatal, is_expired, yesno as _yesno
 from .utils import _file_generator
 from .utils import _dated_file_generator
 from functools import partial
@@ -20,10 +20,10 @@ OPENSSL = 'openssl'
 LETSENCRYPT_CERT = 'lets-encrypt-x3-cross-signed'
 
 
-def genkey(fn, ask=False, keylen=4096):
+def genkey(fn, yesno, ask=False, keylen=4096):
     if ask:
         click.echo('There is no user key in the current directory %s.' % fn.parent)
-        if not yesno('Do you want to create a user key?', False):
+        if not yesno('Do you want to create a user key?', default=False):
             fatal('No user key created')
     subprocess.check_call([
         OPENSSL, 'genrsa', '-out', str(fn), str(keylen)])
@@ -221,7 +221,7 @@ def chain(fn, crt, pem):
                     out.write(b'\n')
 
 
-def remove(base, *patterns):
+def remove(yesno, base, *patterns):
     files = []
     for pattern in patterns:
         for fn in base.glob(pattern):
@@ -234,9 +234,9 @@ def remove(base, *patterns):
             fn.unlink()
 
 
-def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, domains, file_gens):
+def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, domains, file_gens, yesno):
     user_key = file_gens['file'](base, 'user')(
-        'private user key', '.key', genkey, ask=True)
+        'private user key', '.key', genkey, yesno=yesno, ask=True)
     user_pub = file_gens['file'](base, 'user')(
         'public user key', '.pub', genpub, user_key)
     assert user_pub.parent == base
@@ -244,13 +244,13 @@ def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, d
     if not key_base.exists():
         key_base.mkdir()
     key = file_gens['dated'](key_base, main)(
-        'key', '.key', genkey)
+        'key', '.key', genkey, yesno=yesno)
     date_gen = file_gens['current'](key_base, main)
     while True:
         csr = date_gen('csr', '.csr', gencsr, key, domains)
         if verify_csr(csr, domains):
             break
-        remove(key_base, '*.csr', '*.crt', '*.der')
+        remove(yesno, key_base, '*.csr', '*.crt', '*.der')
     with user_key.open('rb') as f:
         priv = OpenSSL.crypto.load_privatekey(
             OpenSSL.crypto.FILETYPE_PEM, f.read())
@@ -270,7 +270,7 @@ def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, d
         crt = date_gen('crt', '.crt', gencrt, acme_factory, check_registration, der, user_pub, base.name, domains)
         if verify_crt(crt, domains):
             break
-        remove(key_base, '*.crt', '*.der')
+        remove(yesno, key_base, '*.crt', '*.der')
     pem = file_gens['dated'](base, LETSENCRYPT_CERT)(
         'pem', '.pem', getpem)
     date_gen('chained crt', '-chained.crt', chain, crt, pem)
@@ -299,12 +299,16 @@ def domain_key(x):
 @click.option(
     "--update-registration/--no-update-registration", default=False,
     help="Force an update of the registration, for example to agree to newer terms of service.")
+@click.option(
+    "-y", "--yes/--ask", default=False,
+    help="Use staging server of letsencrypt.org for testing.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, http, regenerate, staging, update, update_registration):
+def main(domains, dns, http, regenerate, staging, update, update_registration, yes):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
     the same day."""
+    yesno = partial(_yesno, always_yes=yes)
     if staging:
         ca = "https://acme-staging.api.letsencrypt.org"
     else:
@@ -381,12 +385,13 @@ def main(domains, dns, http, regenerate, staging, update, update_registration):
         acme_factory = partial(
             acme.ACME,
             challenges=challenges,
-            tokens=tokens)
+            tokens=tokens,
+            yesno=yesno)
         acme_uris_factory = partial(acme.ACMEUris, ca=ca)
         generate(
             base, main,
             acme_factory, acme_uris_factory, authz_cache_factory,
-            domains, file_gens)
+            domains, file_gens, yesno)
         with base.joinpath(main, 'options.json').open("w") as f:
             f.write(json.dumps(
                 dict(

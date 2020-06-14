@@ -80,7 +80,7 @@ def _dated_file_generator(base, name, date, current=False):
     return generator
 
 
-def yesno(question, default=None, all=False):
+def yesno(question, default=None, all=False, always_yes=False):
     if default is True:
         question = "%s [Yes/no" % question
         answers = {
@@ -108,7 +108,10 @@ def yesno(question, default=None, all=False):
             question = "%s/all" % question
     question = "%s] " % question
     while 1:
-        answer = input(question).lower()
+        if default is None and always_yes:
+            answer = 'yes'
+        else:
+            answer = input(question).lower()
         for option in answers:
             if answer in answers[option]:
                 return option
