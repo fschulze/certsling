@@ -13,6 +13,10 @@ Changelog
 * Only start servers for enabled challenges.
   [fschulze]
 
+* Drop Python 3.4 support.
+  Python 3.5 support will end at it's EOL in September 2020.
+  [fschulze]
+
 
 0.8.0 - 2017-01-04
 ------------------
