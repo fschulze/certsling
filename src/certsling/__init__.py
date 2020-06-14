@@ -282,7 +282,10 @@ def domain_key(x):
 @click.command(context_settings=dict(help_option_names=['-h', '--help']))
 @click.option(
     "--dns/--no-dns", default=False,
-    help="Try DNS challenge if HTTP challenge fails")
+    help="Enable/disable DNS challenge. HTTP challenge is tried first if enabled.")
+@click.option(
+    "--http/--no-http", default=True,
+    help="Enable/disable HTTP challenge.")
 @click.option(
     "-r/-R", "--regenerate/--dont-regenerate", default=False,
     help="Force creating a new certificate even if one for the current day exists.")
@@ -296,7 +299,7 @@ def domain_key(x):
     "--update-registration/--no-update-registration", default=False,
     help="Force an update of the registration, for example to agree to newer terms of service.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, regenerate, staging, update, update_registration):
+def main(domains, dns, http, regenerate, staging, update, update_registration):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
@@ -314,8 +317,18 @@ def main(domains, dns, regenerate, staging, update, update_registration):
         current=partial(_dated_file_generator, date=date, current=current),
         registration=partial(_file_generator, update=update_registration))
     cli_domains = sorted(domains, key=domain_key)
-    options = dict(
-        challenges=['http-01'])
+    challenges = ['http-01']
+    if http and 'http-01' not in challenges:
+        challenges.append('http-01')
+    if not http and 'http-01' in challenges:
+        challenges.remove('http-01')
+    if dns and 'dns-01' not in challenges:
+        challenges.append('dns-01')
+    if not dns and 'dns-01' in challenges:
+        challenges.remove('dns-01')
+    if not challenges:
+        fatal("No challenge types enabled.")
+    options = dict(challenges=challenges)
     if update:
         path = Path(update).absolute()
         if not path.exists():
@@ -330,11 +343,6 @@ def main(domains, dns, regenerate, staging, update, update_registration):
                 x.name.rsplit('.authz_info.json', 1)[0]
                 for x in path.glob('*.authz_info.json')]
             options['main'] = path.name
-    challenges = options['challenges']
-    if dns and 'dns-01' not in challenges:
-        challenges.append('dns-01')
-    if not dns and 'dns-01' in challenges:
-        challenges.remove('dns-01')
     option_domains = tuple(
         sorted(set(options.get('domains', [])), key=domain_key))
     if option_domains:

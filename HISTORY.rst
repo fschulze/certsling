@@ -7,6 +7,9 @@ Changelog
 * Enable ``-h`` for command line help output.
   [fschulze]
 
+* Add option to disable HTTP challenge.
+  [fschulze]
+
 
 0.8.0 - 2017-01-04
 ------------------
