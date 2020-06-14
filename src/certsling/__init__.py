@@ -279,7 +279,7 @@ def domain_key(x):
     return (len(x), x)
 
 
-@click.command()
+@click.command(context_settings=dict(help_option_names=['-h', '--help']))
 @click.option(
     "--dns/--no-dns", default=False,
     help="Try DNS challenge if HTTP challenge fails")

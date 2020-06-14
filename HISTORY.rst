@@ -4,6 +4,8 @@ Changelog
 0.9.0 - Unreleased
 ------------------
 
+* Enable ``-h`` for command line help output.
+  [fschulze]
 
 
 0.8.0 - 2017-01-04
