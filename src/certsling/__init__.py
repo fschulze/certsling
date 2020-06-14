@@ -1,4 +1,5 @@
 from . import acme
+from . import acmesession
 from .servers import start_servers
 from .utils import fatal, is_expired, yesno
 from .utils import _file_generator
@@ -253,8 +254,8 @@ def generate(base, main, acme_factory, acme_uris_factory, authz_cache_factory, d
     with user_key.open('rb') as f:
         priv = OpenSSL.crypto.load_privatekey(
             OpenSSL.crypto.FILETYPE_PEM, f.read())
-    jwk = acme.get_jwk(user_pub)
-    session = acme.get_session(jwk, priv)
+    jwk = acmesession.get_jwk(user_pub)
+    session = acmesession.get_session(jwk, priv)
     check_registration = partial(
         check_acme_registration,
         jwk=jwk,
