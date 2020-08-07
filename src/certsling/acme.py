@@ -40,7 +40,7 @@ class ACME:
     def ensure_nonce(self):
         if self.acme_uris.session.nonce is None:
             res = self.acme_uris.new_nonce()
-            if res.status_code != 204:
+            if res.status_code not in (200, 204):
                 fatal_response("Bad newNonce response", res)
 
     def finalize_order(self, uri, der_data):
