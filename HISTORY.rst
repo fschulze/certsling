@@ -1,6 +1,13 @@
 Changelog
 =========
 
+0.9.1 - Unreleased
+------------------
+
+* Accept return code 200 for nonce request.
+  [witsch]
+
+
 0.9.0 - 2020-06-14
 ------------------
 
