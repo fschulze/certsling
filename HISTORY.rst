@@ -1,7 +1,7 @@
 Changelog
 =========
 
-0.9.1 - Unreleased
+0.9.1 - 2020-08-23
 ------------------
 
 * Accept return code 200 for nonce request.
