@@ -4,6 +4,9 @@ Changelog
 0.9.2 - Unreleased
 ------------------
 
+* Updates for new root certificates.
+  [fschulze]
+
 * Output more info for failed authorizations.
   [fschulze]
 

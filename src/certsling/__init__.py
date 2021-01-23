@@ -175,6 +175,8 @@ def verify_crt(crt, domains):
             OpenSSL.crypto.FILETYPE_PEM, f.read())
     issuer = dict(cert.get_issuer().get_components()).get(
         b'CN', b'unknown').decode('ascii')
+    organisation = dict(cert.get_issuer().get_components()).get(
+        b'O', b'unknown').decode('ascii')
     if issuer in ["happy hacker fake CA",
                   "Fake LE Intermediate X1"]:
         click.echo(click.style("Certificate issued by staging CA!", fg="red"))
@@ -182,9 +184,17 @@ def verify_crt(crt, domains):
                     "Let's Encrypt Authority X2",
                     "Let's Encrypt Authority X3",
                     "Let's Encrypt Authority X4"]:
-        click.echo(click.style("Certificate issued by: %s" % issuer, fg="green"))
+        click.echo(click.style(
+            "Certificate issued by: %s %s" % (organisation, issuer),
+            fg="green"))
+    elif organisation == "Let's Encrypt" and issuer in ["E1", "E2", "R3", "R4"]:
+        click.echo(click.style(
+            "Certificate issued by: %s %s" % (organisation, issuer),
+            fg="green"))
     else:
-        click.echo(click.style("Unknown CA: %s" % issuer, fg="red"))
+        click.echo(click.style(
+            "Unknown CA: %s %s" % (organisation, issuer),
+            fg="red"))
     if not verify_domains(cert, domains):
         subprocess.check_call([
             OPENSSL, 'x509', '-noout', '-text', '-in', str(crt)])
