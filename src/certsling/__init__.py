@@ -6,6 +6,7 @@ from .utils import _file_generator
 from .utils import _dated_file_generator
 from functools import partial
 from pathlib import Path
+from pprint import pprint
 import OpenSSL
 import click
 import datetime
@@ -157,7 +158,14 @@ def gencrt(fn, acme_factory, check_registration, der, user_pub, email, domains):
         cert = acme.get_certificate(info['certificate'])
         with fn.open('wb') as out:
             out.write(cert)
+    elif info.get('status') == 'invalid':
+        for authorization in info['authorizations']:
+            print("Authorization %s" % authorization)
+            pprint(acme.get_authorization_info(authorization))
+        pprint(info)
+        fatal("Failed to get certificate.")
     else:
+        pprint(info)
         fatal("Failed to get certificate.")
 
 

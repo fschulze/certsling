@@ -55,11 +55,14 @@ class ACME:
             fatal_response("Bad get certificate request", res)
         return res.content
 
-    def handle_authorization(self, uri):
+    def get_authorization_info(self, uri):
         res = self.acme_uris.session.post_as_get(uri)
         if res.status_code != 200:
             fatal_response("Bad authorization response", res)
-        data = res.json()
+        return res.json()
+
+    def handle_authorization(self, uri):
+        data = self.get_authorization_info(uri)
         if data.get('status') == 'valid':
             self.tokens.set_status(uri, 'valid')
             return

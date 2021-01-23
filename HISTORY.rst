@@ -1,6 +1,13 @@
 Changelog
 =========
 
+0.9.2 - Unreleased
+------------------
+
+* Output more info for failed authorizations.
+  [fschulze]
+
+
 0.9.1 - 2020-08-23
 ------------------
 
