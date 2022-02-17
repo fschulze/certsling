@@ -3,7 +3,9 @@ import binascii
 import http.server
 import json
 import pytest
+import requests
 import threading
+import time
 
 
 def d64(data):
@@ -94,6 +96,20 @@ class HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
+def wait_for_http(method, url, timeout=60):
+    session = requests.Session()
+    while timeout > 0:
+        try:
+            getattr(session, method.lower())(url, timeout=1)
+        except ConnectionError:
+            time.sleep(1)
+            timeout -= 1
+        else:
+            return
+    raise RuntimeError(
+        f"The request {method} {url} didn't become accessible")
+
+
 @pytest.fixture
 def server():
     address = ('localhost', 0)
@@ -101,8 +117,10 @@ def server():
     server.accounts = {}
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    wait_for_http('HEAD', "http://%s:%s/newNonce" % server.socket.getsockname())
     yield server
     server.shutdown()
+    thread.join()
 
 
 @pytest.fixture
