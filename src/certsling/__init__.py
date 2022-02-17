@@ -288,7 +288,7 @@ def domain_key(x):
     help="Force an update of the registration, for example to agree to newer terms of service.")
 @click.option(
     "-y", "--yes/--ask", default=False,
-    help="Use staging server of letsencrypt.org for testing.")
+    help="Answer yes to all questions.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
 def main(domains, dns, http, regenerate, staging, update, update_registration, yes):
     """Creates a certificate for one or more domains.
