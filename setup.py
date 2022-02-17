@@ -18,10 +18,10 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3 :: Only",
-        "Programming Language :: Python :: 3.5",
-        "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8"],
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10"],
     install_requires=[
         'click',
         'dnspython>=1.15.0',
@@ -31,4 +31,4 @@ setup(
         'console_scripts': ['certsling = certsling:main']},
     packages=['certsling'],
     package_dir={'': 'src'},
-    python_requires='>=3.5')
+    python_requires='>=3.7')
