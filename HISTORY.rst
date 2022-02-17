@@ -4,6 +4,9 @@ Changelog
 0.9.2 - Unreleased
 ------------------
 
+* Add option to always update with current settings without asking.
+  [fschulze]
+
 * Updates for new root certificates.
   [fschulze]
 

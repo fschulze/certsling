@@ -289,12 +289,16 @@ def domain_key(x):
 @click.option(
     "-y", "--yes/--ask", default=False,
     help="Answer yes to all questions.")
+@click.option(
+    "--always-update/--ask-update", default=False,
+    help="Answer yes when asked whether to update with current settings.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, http, regenerate, staging, update, update_registration, yes):
+def main(domains, dns, http, regenerate, staging, update, always_update, update_registration, yes):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
     the same day."""
+    update_yesno = partial(_yesno, always_yes=yes or always_update)
     yesno = partial(_yesno, always_yes=yes)
     if staging:
         ca = "https://acme-staging-v02.api.letsencrypt.org"
@@ -363,7 +367,7 @@ def main(domains, dns, http, regenerate, staging, update, update_registration, y
             "Challenges: %s" % ", ".join(challenges),
             fg="green"))
         if update:
-            if not yesno("Do you want to update with the above settings?"):
+            if not update_yesno("Do you want to update with the above settings?"):
                 fatal('Aborted.')
         acme_factory = partial(
             acme.ACME,
