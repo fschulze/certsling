@@ -1,8 +1,8 @@
 Changelog
 =========
 
-0.9.2 - Unreleased
-------------------
+0.10.0 - 2022-02-17
+-------------------
 
 * Drop Python 3.5 and 3.6 support, add Python 3.9 and 3.10.
   [fschulze]
