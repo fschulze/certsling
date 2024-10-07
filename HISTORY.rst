@@ -1,6 +1,13 @@
 Changelog
 =========
 
+0.11.0 - Unreleased
+-------------------
+
+* Added new Let's Encrypt issuers.
+  [fschulze]
+
+
 0.10.0 - 2022-02-17
 -------------------
 

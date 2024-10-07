@@ -17,6 +17,10 @@ import time
 
 OPENSSL = 'openssl'
 LETSENCRYPT_CERT = 'lets-encrypt-x3-cross-signed'
+LETSENCRYPT_ISSUERS = frozenset([
+    "E1", "E2", "R3", "R4",
+    "E5", "E6", "E7", "E8", "E9",
+    "R10", "R11", "R12", "R13", "R14"])
 
 
 def genkey(fn, yesno, ask=False, keylen=4096):
@@ -187,7 +191,7 @@ def verify_crt(crt, domains):
         click.echo(click.style(
             "Certificate issued by: %s %s" % (organisation, issuer),
             fg="green"))
-    elif organisation == "Let's Encrypt" and issuer in ["E1", "E2", "R3", "R4"]:
+    elif organisation == "Let's Encrypt" and issuer in LETSENCRYPT_ISSUERS:
         click.echo(click.style(
             "Certificate issued by: %s %s" % (organisation, issuer),
             fg="green"))
