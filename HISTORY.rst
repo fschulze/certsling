@@ -4,6 +4,9 @@ Changelog
 0.11.0 - Unreleased
 -------------------
 
+* Added support for ECDSA keys.
+  [fschulze]
+
 * Added new Let's Encrypt issuers.
   [fschulze]
 

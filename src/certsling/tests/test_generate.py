@@ -50,7 +50,8 @@ def test_user_gen(base, generate, verify_crt_true):
     generate(
         main=domains[0], domains=domains,
         file_gens=get_file_gens(),
-        yesno=lambda m, default=None: True)
+        yesno=lambda m, default=None: True,
+        keycurve=None, keylen=512, keytype="rsa")
     fns = list(x.name for x in base.iterdir())
     assert 'user.key' in fns
     assert 'user.pub' in fns

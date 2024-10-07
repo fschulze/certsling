@@ -15,6 +15,8 @@ import subprocess
 import time
 
 
+DEFAULT_ECDSA_CURVE = "prime256v1"
+DEFAULT_RSA_LEN = 4096
 OPENSSL = 'openssl'
 LETSENCRYPT_CERT = 'lets-encrypt-x3-cross-signed'
 LETSENCRYPT_ISSUERS = frozenset([
@@ -23,7 +25,21 @@ LETSENCRYPT_ISSUERS = frozenset([
     "R10", "R11", "R12", "R13", "R14"])
 
 
-def genkey(fn, yesno, ask=False, keylen=4096):
+def genecdsakey(fn, yesno, ask=False, keycurve=DEFAULT_ECDSA_CURVE):
+    if ask:
+        click.echo('There is no user key in the current directory %s.' % fn.parent)
+        if not yesno('Do you want to create a user key?', default=False):
+            fatal('No user key created')
+    subprocess.check_call([
+        OPENSSL, 'ecparam', '-genkey', '-out', str(fn), '-name', keycurve])
+
+
+def genecdsapub(fn, key):
+    subprocess.check_call([
+        OPENSSL, 'ec', '-in', str(key), '-pubout', '-out', str(fn)])
+
+
+def genrsakey(fn, yesno, ask=False, keylen=DEFAULT_RSA_LEN):
     if ask:
         click.echo('There is no user key in the current directory %s.' % fn.parent)
         if not yesno('Do you want to create a user key?', default=False):
@@ -32,7 +48,7 @@ def genkey(fn, yesno, ask=False, keylen=4096):
         OPENSSL, 'genrsa', '-out', str(fn), str(keylen)])
 
 
-def genpub(fn, key):
+def genrsapub(fn, key):
     subprocess.check_call([
         OPENSSL, 'rsa', '-in', str(key), '-pubout', '-out', str(fn)])
 
@@ -229,17 +245,23 @@ def remove(yesno, base, *patterns):
             fn.unlink()
 
 
-def generate(base, main, acme_factory, acme_uris_factory, domains, file_gens, yesno):
+def generate(base, main, acme_factory, acme_uris_factory, domains, file_gens, yesno, keycurve, keylen, keytype):
     user_key = file_gens['file'](base, 'user')(
-        'private user key', '.key', genkey, yesno=yesno, ask=True)
+        'private RSA user key', '.key', partial(genrsakey, keylen=DEFAULT_RSA_LEN), yesno=yesno, ask=True)
     user_pub = file_gens['file'](base, 'user')(
-        'public user key', '.pub', genpub, user_key)
+        'public RSA user key', '.pub', partial(genrsapub), user_key)
     assert user_pub.parent == base
     key_base = base.joinpath(main)
     if not key_base.exists():
         key_base.mkdir()
-    key = file_gens['dated'](key_base, main)(
-        'key', '.key', genkey, yesno=yesno)
+    if keytype == "rsa":
+        key = file_gens['dated'](key_base, main)(
+            'key', '.key', partial(genrsakey, keylen=keylen), yesno=yesno)
+    elif keytype == "ecdsa":
+        key = file_gens['dated'](key_base, main)(
+            'key', '.key', partial(genecdsakey, keycurve=keycurve), yesno=yesno)
+    else:
+        raise RuntimeError("Invalid key type %r" % keytype)
     date_gen = file_gens['current'](key_base, main)
     while True:
         csr = date_gen('csr', '.csr', gencsr, key, domains)
@@ -296,8 +318,19 @@ def domain_key(x):
 @click.option(
     "--always-update/--ask-update", default=False,
     help="Answer yes when asked whether to update with current settings.")
+@click.option(
+    "--keycurve", default=DEFAULT_ECDSA_CURVE,
+    help="The curve to use for ecdsa keys. Default is prime256v1.")
+@click.option(
+    "--keytype", default="rsa",
+    type=click.Choice(["rsa", "ecdsa"], case_sensitive=False),
+    help="Key type to use for the certificate.")
+@click.option(
+    "--keylen", default=DEFAULT_RSA_LEN,
+    type=int,
+    help="Key length to use for RSA.")
 @click.argument("domains", metavar="[DOMAIN]...", nargs=-1)
-def main(domains, dns, http, regenerate, staging, update, always_update, update_registration, yes):
+def main(domains, dns, http, keycurve, keylen, keytype, regenerate, staging, update, always_update, update_registration, yes):
     """Creates a certificate for one or more domains.
 
     By default a new certificate is generated, except when running again on
@@ -382,7 +415,7 @@ def main(domains, dns, http, regenerate, staging, update, always_update, update_
         generate(
             base, main,
             acme_factory, acme_uris_factory,
-            domains, file_gens, yesno)
+            domains, file_gens, yesno, keycurve, keylen, keytype)
         with base.joinpath(main, 'options.json').open("w") as f:
             f.write(json.dumps(
                 dict(
